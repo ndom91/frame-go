@@ -27,7 +27,8 @@ help:
 build-arm:
 	@echo ""
 	@echo "🔨 Cross-compiling for ARM..."
-	go build -o ${BINARY_NAME}-arm .
+	# go build -o ${BINARY_NAME}-arm .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -ldflags="-s -w" -o ${BINARY_NAME}-arm .
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
 	@file ${BINARY_NAME}-arm
 
@@ -87,10 +88,10 @@ ssh:
 	ssh ${PI_HOST}
 
 # Development helpers
-dev-shell:
+dev-native:
 	nix develop
 
-dev-shell-arm:
+dev-arm:
 	nix develop .#arm
 
 # Quick development cycle

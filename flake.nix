@@ -24,8 +24,61 @@
 
           # You'll need to update this hash after first build
           vendorHash = null;
+          buildFlags = [ "-mod=readonly" ];
 
           # Build inputs for ARM target
+          # buildInputs = with armPkgs; [
+          #   libxkbcommon
+          #   xorg.libX11.dev
+          #
+          #   glfw
+          #   libGL.dev
+          #   libGLU
+          #   openssh
+          #   pkg-config
+          #   glibc
+          #   xorg.libXcursor
+          #   xorg.libXi
+          #   xorg.libXinerama
+          #   xorg.libXrandr
+          #   xorg.libXxf86vm
+          #   xorg.xinput
+          # ];
+          #
+          nativeBuildInputs = with armPkgs.buildPackages; [
+            pkg-config
+            gcc
+          ];
+
+          # stdenv = armPkgs.llvmPackages_18.stdenv;
+
+          # CGO settings for cross-compilation
+          # env = {
+          #   CGO_ENABLED = "1";
+          #   GOOS = "linux";
+          #   GOARCH = "arm64";
+          #
+          #   # Point to the correct ARM libraries
+          #   CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include -I${armPkgs.libGL.dev}/include";
+          #   CGO_LDFLAGS = "-L${armPkgs.xorg.libX11}/lib -L${armPkgs.xorg.libXcursor}/lib -L${armPkgs.xorg.libXi}/lib -L${armPkgs.xorg.libXinerama}/lib -L${armPkgs.xorg.libXrandr}/lib -L${armPkgs.xorg.libXxf86vm}/lib -L${armPkgs.libGL}/lib";
+          #
+          #   # Cross-compilation toolchain
+          #   CC = "${armPkgs.buildPackages.gcc}/bin/aarch64-unknown-linux-gnu-gcc";
+          #   CXX = "${armPkgs.buildPackages.gcc}/bin/aarch64-unknown-linux-gnu-g++";
+          #
+          #   # PKG_CONFIG for cross-compilation
+          #   PKG_CONFIG = "${armPkgs.buildPackages.pkg-config}/bin/pkg-config";
+          #   PKG_CONFIG_PATH = "${armPkgs.xorg.libX11.dev}/lib/pkgconfig:${armPkgs.libGL.dev}/lib/pkgconfig";
+          # };
+          # GOOS = "linux";
+          # GOARCH = "arm64";
+          # GOARM = "7";
+
+          # Point to ARM libraries
+
+          # Build flags for smaller binary
+          # ldflags = [ "-s" "-w" ];
+
           buildInputs = with armPkgs; [
             libxkbcommon
             xorg.libX11.dev
@@ -44,25 +97,18 @@
             xorg.xinput
           ];
 
-          nativeBuildInputs = with armPkgs.buildPackages; [
-            pkg-config
-            gcc
-          ];
-
+          # Let Go handle cross-compilation internally
           env = {
-            # CGO settings for cross-compilation
             CGO_ENABLED = "1";
+            GOOS = "linux";
+            GOARCH = "arm64";
+
+            CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include";
+            CGO_LDFLAGS = "-L${armPkgs.xorg.libX11}/lib -L${armPkgs.libGL}/lib";
+            # Only set CGO flags for libraries, not CC
+            # CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include -I${armPkgs.libGL.dev}/include";
+            # CGO_LDFLAGS = "-L${armPkgs.xorg.libX11}/lib -L${armPkgs.xorg.libXcursor}/lib -L${armPkgs.xorg.libXi}/lib -L${armPkgs.xorg.libXinerama}/lib -L${armPkgs.xorg.libXrandr}/lib -L${armPkgs.xorg.libXxf86vm}/lib -L${armPkgs.libGL}/lib";
           };
-          # GOOS = "linux";
-          # GOARCH = "arm64";
-          # GOARM = "7";
-
-          # Point to ARM libraries
-          CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include";
-          CGO_LDFLAGS = "-L${armPkgs.xorg.libX11}/lib -L${armPkgs.libGL}/lib";
-
-          # Build flags for smaller binary
-          ldflags = [ "-s" "-w" ];
 
           # Meta information
           meta = with pkgs.lib; {
@@ -161,15 +207,15 @@
 
           shellHook = ''
             # Set up cross-compilation environment
-            # export GOOS=linux
-            # export GOARCH=arm64
+            export GOOS=linux
+            export GOARCH=arm64
             # export GOARM=7
             export CGO_ENABLED=1
-            export CC=${armPkgs.buildPackages.gcc}/bin/aarch64-unknown-linux-gnu-gcc
-            export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
+            # export CC=${armPkgs.buildPackages.gcc}/bin/aarch64-unknown-linux-gnu-gcc
+            # export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
 
             echo ""
-            echo "🚀 Photo Frame Development Environment"
+            echo "🖥️ (ARM) Photo Frame Development Environment"
             echo ""
             echo "Available commands:"
             echo "  make build-arm    - Cross-compile for ARM"
@@ -232,9 +278,14 @@
           CGO_LDFLAGS = "-L${pkgs.xorg.libX11}/lib -L${pkgs.libGL}/lib";
 
           shellHook = ''
+            # Set up cross-compilation environment
+            export GOOS=linux
+            export GOARCH=amd64
+            export CGO_ENABLED=1
+            export PKG_CONFIG_PATH=${pkgs.buildPackages.pkg-config}/bin/pkg-config
+
             echo ""
-            echo "🖥️ Photo Frame Native Development Environment"
-            echo "Building for: $(go env GOOS)/$(go env GOARCH)"
+            echo "🖥️ (NATIVE) Photo Frame Development Environment"
             echo ""
             echo "Available commands:"
             echo "  make build-arm    - Cross-compile for ARM"
@@ -245,12 +296,6 @@
             echo "Cross-compilation environment:"
             echo "  GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) GOARM=$(go env GOARM)"
             echo ""
-            
-            # Set up cross-compilation environment
-            # export GOOS=linux
-            # export GOARCH=amd64
-            export CGO_ENABLED=1
-            export PKG_CONFIG_PATH=${pkgs.buildPackages.pkg-config}/bin/pkg-config
           '';
         };
 
