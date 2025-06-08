@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -28,7 +26,7 @@ func NewPhotoFrame() *PhotoFrame {
 	a := app.New()
 	a.Settings().SetTheme(&CustomTheme{})
 
-	w := a.NewWindow("Digital Photo Frame")
+	w := a.NewWindow("Domino Frame")
 
 	return &PhotoFrame{
 		app:        a,
@@ -80,13 +78,10 @@ func (pf *PhotoFrame) setupUI() {
 }
 
 func (pf *PhotoFrame) loadImage(path string) {
-	resource, err := storage.LoadResourceFromURI(storage.NewFileURI(path))
-	if err != nil {
-		log.Printf("Error loading image %s: %v", path, err)
-		return
-	}
+	// pf.imageView = canvas.NewImageFromURI(s3URI)
 
-	pf.imageView.Resource = resource
+	pf.imageView.File = path
+	pf.imageView.FillMode = canvas.ImageFillContain
 	pf.imageView.Refresh()
 }
 
@@ -97,6 +92,7 @@ func (pf *PhotoFrame) nextImage() {
 
 	pf.currentIdx = (pf.currentIdx + 1) % len(pf.images)
 	pf.loadImage(pf.images[pf.currentIdx])
+	fmt.Println("Next image:", pf.images[pf.currentIdx])
 }
 
 func (pf *PhotoFrame) previousImage() {
@@ -106,6 +102,7 @@ func (pf *PhotoFrame) previousImage() {
 
 	pf.currentIdx = (pf.currentIdx - 1 + len(pf.images)) % len(pf.images)
 	pf.loadImage(pf.images[pf.currentIdx])
+	fmt.Println("Previous image:", pf.images[pf.currentIdx])
 }
 
 func (pf *PhotoFrame) loadImagesFromS3() {
@@ -117,7 +114,6 @@ func (pf *PhotoFrame) loadImagesFromS3() {
 		panic(err)
 	}
 	exPath := filepath.Dir(ex)
-	fmt.Println(exPath)
 
 	pf.images = []string{
 		exPath + "/images/image1.jpg",
@@ -134,7 +130,9 @@ func (pf *PhotoFrame) startSlideshow(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
-			pf.nextImage()
+			fyne.DoAndWait(func() {
+				pf.nextImage()
+			})
 		}
 	}()
 }
@@ -142,9 +140,7 @@ func (pf *PhotoFrame) startSlideshow(interval time.Duration) {
 func (pf *PhotoFrame) run() {
 	pf.setupUI()
 	pf.loadImagesFromS3()
-
 	pf.startSlideshow(10 * time.Second)
-
 	pf.window.ShowAndRun()
 }
 
