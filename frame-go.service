@@ -1,0 +1,17 @@
+[Unit]
+Description=Frame-Go Application
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+User=root # Required for BLE GATT server
+WorkingDirectory=/home/pi
+Environment=DISPLAY=:0
+ExecStartPre=/bin/sleep 5
+ExecStart=/path/to/your/frame-go
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
