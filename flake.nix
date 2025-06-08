@@ -12,7 +12,8 @@
         pkgs = nixpkgs.legacyPackages.${system};
 
         # Cross-compilation target for ARM (Pi Zero 2W)
-        armPkgs = pkgs.pkgsCross.armv7l-hf-multiplatform;
+        # armPkgs = pkgs.pkgsCross.armv7l-hf-multiplatform;
+        armPkgs = pkgs.pkgsCross.aarch64-multiplatform;
 
         # Build the photo frame binary for ARM
         photo-frame-arm = armPkgs.buildGoModule rec {
@@ -26,15 +27,21 @@
 
           # Build inputs for ARM target
           buildInputs = with armPkgs; [
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXrandr
-            xorg.libXinerama
-            xorg.libXi
-            xorg.libXxf86vm
-            libGL
+            libxkbcommon
+            xorg.libX11.dev
+
+            glfw
+            libGL.dev
             libGLU
-            alsa-lib
+            openssh
+            pkg-config
+            glibc
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXinerama
+            xorg.libXrandr
+            xorg.libXxf86vm
+            xorg.xinput
           ];
 
           nativeBuildInputs = with armPkgs.buildPackages; [
@@ -42,11 +49,13 @@
             gcc
           ];
 
-          # CGO settings for cross-compilation
-          CGO_ENABLED = "1";
+          env = {
+            # CGO settings for cross-compilation
+            CGO_ENABLED = "1";
+          };
           # GOOS = "linux";
-          # GOARCH = "arm";
-          GOARM = "7";
+          # GOARCH = "arm64";
+          # GOARM = "7";
 
           # Point to ARM libraries
           CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include";
@@ -151,6 +160,15 @@
           ];
 
           shellHook = ''
+            # Set up cross-compilation environment
+            # export GOOS=linux
+            # export GOARCH=arm64
+            # export GOARM=7
+            export CGO_ENABLED=1
+            export CC=${armPkgs.buildPackages.gcc}/bin/aarch64-unknown-linux-gnu-gcc
+            export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
+
+            echo ""
             echo "🚀 Photo Frame Development Environment"
             echo ""
             echo "Available commands:"
@@ -162,14 +180,6 @@
             echo "Cross-compilation environment:"
             echo "  GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) GOARM=$(go env GOARM)"
             echo ""
-            
-            # Set up cross-compilation environment
-            # export GOOS=linux
-            # export GOARCH=arm
-            # export GOARM=7
-            export CGO_ENABLED=0
-            # export CC=${armPkgs.buildPackages.gcc}/bin/armv7l-unknown-linux-gnueabihf-gcc
-            # export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
           '';
         };
 
@@ -237,8 +247,8 @@
             echo ""
             
             # Set up cross-compilation environment
-            export GOOS=linux
-            export GOARCH=amd64
+            # export GOOS=linux
+            # export GOARCH=amd64
             export CGO_ENABLED=1
             export PKG_CONFIG_PATH=${pkgs.buildPackages.pkg-config}/bin/pkg-config
           '';
@@ -246,7 +256,7 @@
 
         # Package outputs
         packages = {
-          default = photo-frame-arm;
+          default = photo-frame-native;
           photo-frame-arm = photo-frame-arm;
           photo-frame-native = photo-frame-native;
         };

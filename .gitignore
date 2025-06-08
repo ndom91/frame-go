@@ -1,5 +1,8 @@
 .direnv
 *.bak
 images/
+vendor/
 photo-frame
+photo-frame-amd64
+photo-frame-arm
 result

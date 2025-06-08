@@ -23,20 +23,24 @@ help:
 	@echo "  PI_TARGET_DIR=${PI_TARGET_DIR}"
 
 # Cross-compile for ARM using Go directly
+# GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -ldflags="-s -w" -o ${BINARY_NAME}-arm .
 build-arm:
+	@echo ""
 	@echo "🔨 Cross-compiling for ARM..."
-	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 go build -ldflags="-s -w" -o ${BINARY_NAME}-arm .
+	go build -o ${BINARY_NAME}-arm .
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
 	@file ${BINARY_NAME}-arm
 
 # Build for native system
 build-native:
+	@echo ""
 	@echo "🔨 Building for native system..."
 	go build -o ${BINARY_NAME} .
 	@echo "✅ Native binary ready: ${BINARY_NAME}"
 
 # Build native using Nix flake (recommended)
 flake-build-native:
+	@echo ""
 	@echo "❄️  Building native with Nix flake..."
 	nix build .#photo-frame-native
 	@echo "✅ Nix build complete"
@@ -44,6 +48,7 @@ flake-build-native:
 
 # Build ARM using Nix flake (recommended)
 flake-build-arm:
+	@echo ""
 	@echo "❄️  Building ARM with Nix flake..."
 	nix build .#photo-frame-arm
 	@echo "✅ Nix build complete"
