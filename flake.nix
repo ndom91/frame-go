@@ -22,26 +22,38 @@
           src = ./.;
 
           # You'll need to update this hash after first build
-          # Run: nix build .#photo-frame-arm
-          # Then use the hash from the error message
-          vendorHash = null; # or "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          vendorHash = null;
 
-          # CGO is needed for BLE libraries
+          # Build inputs for ARM target
+          buildInputs = with armPkgs; [
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXinerama
+            xorg.libXi
+            xorg.libXxf86vm
+            libGL
+            libGLU
+            alsa-lib
+          ];
+
+          nativeBuildInputs = with armPkgs.buildPackages; [
+            pkg-config
+            gcc
+          ];
+
+          # CGO settings for cross-compilation
           CGO_ENABLED = "1";
-
-          # Set target architecture
-          GOOS = "linux";
-          GOARCH = "arm";
+          # GOOS = "linux";
+          # GOARCH = "arm";
           GOARM = "7";
+
+          # Point to ARM libraries
+          CGO_CFLAGS = "-I${armPkgs.xorg.libX11.dev}/include";
+          CGO_LDFLAGS = "-L${armPkgs.xorg.libX11}/lib -L${armPkgs.libGL}/lib";
 
           # Build flags for smaller binary
           ldflags = [ "-s" "-w" ];
-
-          # Install phase
-          installPhase = ''
-            mkdir -p $out/bin
-            cp photo-frame $out/bin/
-          '';
 
           # Meta information
           meta = with pkgs.lib; {
@@ -58,19 +70,48 @@
           src = ./.;
           vendorHash = null;
 
-          # Native dependencies for development
+          # GOOS = "linux";
+          # GOARCH = "amd64";
+
           nativeBuildInputs = with pkgs; [
             pkg-config
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXrandr
-            xorg.libXinerama
-            xorg.libXi
-            xorg.libXxf86vm
-            xorg.libGL
-            libGL
-            libGLU
+            copyDesktopItems
           ];
+          buildInputs = with pkgs; [
+            libxkbcommon
+            xorg.libX11.dev
+
+            glfw
+            libGL.dev
+            libGLU
+            openssh
+            pkg-config
+            glibc
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXinerama
+            xorg.libXrandr
+            xorg.libXxf86vm
+            xorg.xinput
+          ];
+
+          # Build flags for smaller binary
+          ldflags = [ "-s" "-w" ];
+
+          CGO_ENABLED = "1";
+
+          # Point to X11/libGL libraries
+          CGO_CFLAGS = "-I${pkgs.xorg.libX11.dev}/include";
+          CGO_LDFLAGS = "-L${pkgs.xorg.libX11}/lib -L${pkgs.libGL}/lib";
+
+          # desktopItems = [
+          #   (makeDesktopItem {
+          #     name = "photo-frame-native";
+          #     exec = pname;
+          #     icon = pname;
+          #     desktopName = pname;
+          #   })
+          # ];
 
           meta = with pkgs.lib; {
             description = "Digital photo frame application (native)";
@@ -81,7 +122,7 @@
       in
       {
         # Development shell
-        devShells.default = pkgs.mkShell {
+        devShells.arm = pkgs.mkShell {
           buildInputs = with pkgs; [
             # Go development
             go
@@ -101,7 +142,7 @@
             xorg.libXinerama
             xorg.libXi
             xorg.libXxf86vm
-            libGL
+            libGL.dev
             libGLU
 
             # Deployment tools
@@ -119,40 +160,87 @@
             echo "  make clean        - Clean build artifacts"
             echo ""
             echo "Cross-compilation environment:"
-            echo "  GOOS=linux GOARCH=arm GOARM=7"
+            echo "  GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) GOARM=$(go env GOARM)"
             echo ""
             
             # Set up cross-compilation environment
-            export GOOS=linux
-            export GOARCH=arm
-            export GOARM=7
-            export CGO_ENABLED=1
-            export CC=${armPkgs.buildPackages.gcc}/bin/armv7l-unknown-linux-gnueabihf-gcc
-            export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
+            # export GOOS=linux
+            # export GOARCH=arm
+            # export GOARM=7
+            export CGO_ENABLED=0
+            # export CC=${armPkgs.buildPackages.gcc}/bin/armv7l-unknown-linux-gnueabihf-gcc
+            # export PKG_CONFIG_PATH=${armPkgs.buildPackages.pkg-config}/bin/pkg-config
           '';
         };
 
         # Alternative shell for native development only
-        devShells.native = pkgs.mkShell {
+        devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
+            # go
+            # gopls
+            # gotools
+            # go-tools
+            # pkg-config
+            # xorg.libX11
+            # xorg.libXcursor
+            # xorg.libXrandr
+            # xorg.libXinerama
+            # xorg.libXi
+            # xorg.libXxf86vm
+            # libGL
+            # libGLU
+
             go
             gopls
-            gotools
             go-tools
-            pkg-config
-            xorg.libX11
-            xorg.libXcursor
-            xorg.libXrandr
-            xorg.libXinerama
-            xorg.libXi
-            xorg.libXxf86vm
-            libGL
+            glxinfo
+
+            libxkbcommon
+            xorg.libX11.dev
+
+            glfw
+            libGL.dev
             libGLU
+            openssh
+            pkg-config
+            glibc
+            xorg.libXcursor
+            xorg.libXi
+            xorg.libXinerama
+            xorg.libXrandr
+            xorg.libXxf86vm
+            xorg.xinput
+            # wayland.dev
+            # mesa
           ];
 
+          # CGO settings for cross-compilation
+          CGO_ENABLED = "1";
+
+          # Point to X11/libGL libraries
+          CGO_CFLAGS = "-I${pkgs.xorg.libX11.dev}/include";
+          CGO_LDFLAGS = "-L${pkgs.xorg.libX11}/lib -L${pkgs.libGL}/lib";
+
           shellHook = ''
-            echo "🖥️  Native Development Environment"
+            echo ""
+            echo "🖥️ Photo Frame Native Development Environment"
             echo "Building for: $(go env GOOS)/$(go env GOARCH)"
+            echo ""
+            echo "Available commands:"
+            echo "  make build-arm    - Cross-compile for ARM"
+            echo "  make build-native - Build for current system"
+            echo "  make deploy       - Deploy to Pi"
+            echo "  make clean        - Clean build artifacts"
+            echo ""
+            echo "Cross-compilation environment:"
+            echo "  GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) GOARM=$(go env GOARM)"
+            echo ""
+            
+            # Set up cross-compilation environment
+            export GOOS=linux
+            export GOARCH=amd64
+            export CGO_ENABLED=1
+            export PKG_CONFIG_PATH=${pkgs.buildPackages.pkg-config}/bin/pkg-config
           '';
         };
 

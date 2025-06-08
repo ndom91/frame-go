@@ -35,9 +35,16 @@ build-native:
 	go build -o ${BINARY_NAME} .
 	@echo "✅ Native binary ready: ${BINARY_NAME}"
 
-# Build using Nix flake (recommended)
-flake-build:
-	@echo "❄️  Building with Nix flake..."
+# Build native using Nix flake (recommended)
+flake-build-native:
+	@echo "❄️  Building native with Nix flake..."
+	nix build .#photo-frame-native
+	@echo "✅ Nix build complete"
+	@ls -la result/bin/
+
+# Build ARM using Nix flake (recommended)
+flake-build-arm:
+	@echo "❄️  Building ARM with Nix flake..."
 	nix build .#photo-frame-arm
 	@echo "✅ Nix build complete"
 	@ls -la result/bin/
@@ -78,8 +85,8 @@ ssh:
 dev-shell:
 	nix develop
 
-dev-shell-native:
-	nix develop .#native
+dev-shell-arm:
+	nix develop .#arm
 
 # Quick development cycle
 dev: build-native
