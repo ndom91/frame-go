@@ -36,6 +36,7 @@ make build-native
 For ARM64 target devices
 
 ```bash
+make dev-arm
 make build-arm
 ```
 

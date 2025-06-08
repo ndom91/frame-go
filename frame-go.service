@@ -5,11 +5,10 @@ Wants=graphical-session.target
 
 [Service]
 Type=simple
-User=root # Required for BLE GATT server
+User=root
 WorkingDirectory=/home/pi
 Environment=DISPLAY=:0
-ExecStartPre=/bin/sleep 5
-ExecStart=/path/to/your/frame-go
+ExecStart=/home/pi/photo-frame
 Restart=always
 RestartSec=5
 
