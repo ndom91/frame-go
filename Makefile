@@ -1,7 +1,7 @@
 .PHONY: build-arm build-native clean deploy test flake-build help
 
 # Configuration
-PI_HOST ?= pi@raspberrypi.local
+PI_HOST ?= pi@domino-frame-8dp3
 PI_TARGET_DIR ?= /home/pi/photo-frame
 BINARY_NAME = photo-frame
 
@@ -23,12 +23,12 @@ help:
 	@echo "  PI_TARGET_DIR=${PI_TARGET_DIR}"
 
 # Cross-compile for ARM using Go directly
-# GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -ldflags="-s -w" -o ${BINARY_NAME}-arm .
 build-arm:
 	@echo ""
 	@echo "🔨 Cross-compiling for ARM..."
-	# go build -o ${BINARY_NAME}-arm .
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -ldflags="-s -w" -o ${BINARY_NAME}-arm .
+	CGO_LDFLAGS="-Xlinker -rpath=/path/to/another_glibc/lib"
+
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-unknown-linux-gnu-gcc go build -v -ldflags="-s -w -a -I=/lib/ld-linux-aarch64.so.1"  -o ${BINARY_NAME}-arm .
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
 	@file ${BINARY_NAME}-arm
 
@@ -39,7 +39,7 @@ build-native:
 	go build -o ${BINARY_NAME} .
 	@echo "✅ Native binary ready: ${BINARY_NAME}"
 
-# Build native using Nix flake (recommended)
+# Build native using Nix flake
 flake-build-native:
 	@echo ""
 	@echo "❄️  Building native with Nix flake..."
@@ -47,7 +47,7 @@ flake-build-native:
 	@echo "✅ Nix build complete"
 	@ls -la result/bin/
 
-# Build ARM using Nix flake (recommended)
+# Build ARM using Nix flake
 flake-build-arm:
 	@echo ""
 	@echo "❄️  Building ARM with Nix flake..."
@@ -55,15 +55,10 @@ flake-build-arm:
 	@echo "✅ Nix build complete"
 	@ls -la result/bin/
 
-# Run tests
-test:
-	@echo "🧪 Running tests..."
-	go test ./...
-
 # Clean build artifacts
 clean:
 	@echo "🧹 Cleaning up..."
-	rm -f ${BINARY_NAME} ${BINARY_NAME}-arm
+	rm -f ${BINARY_NAME} ${BINARY_NAME}-arm ${BINARY_NAME}-native
 	rm -rf result
 	go clean
 
@@ -72,20 +67,14 @@ deploy: build-arm
 	@echo "🚀 Deploying to Pi at ${PI_HOST}..."
 	ssh ${PI_HOST} "mkdir -p ${PI_TARGET_DIR}"
 	scp ${BINARY_NAME}-arm ${PI_HOST}:${PI_TARGET_DIR}/${BINARY_NAME}
-	scp config.example.json ${PI_HOST}:${PI_TARGET_DIR}/ || true
+	# scp config.example.json ${PI_HOST}:${PI_TARGET_DIR}/ || true
 	@echo "✅ Deployment complete"
-	@echo "Run on Pi: ssh ${PI_HOST} 'cd ${PI_TARGET_DIR} && ./${BINARY_NAME}'"
 
 # Deploy using Nix-built binary
 deploy-nix: flake-build
 	@echo "🚀 Deploying Nix-built binary to Pi..."
-	ssh ${PI_HOST} "mkdir -p ${PI_TARGET_DIR}"
-	scp result/bin/photo-frame ${PI_HOST}:${PI_TARGET_DIR}/
+	scp -i ~/.ssh/id_ndo4 photo-frame-arm ${PI_HOST}:${PI_TARGET_DIR}/
 	@echo "✅ Nix deployment complete"
-
-# SSH into Pi
-ssh:
-	ssh ${PI_HOST}
 
 # Development helpers
 dev-native:
