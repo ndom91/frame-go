@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
+	// "fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -56,14 +58,13 @@ func (pf *PhotoFrame) setupUI() {
 	buttonLayout.Add(rightZone)
 	layout := container.New(layout.NewStackLayout(), pf.imageView, buttonLayout)
 
-	hiddenCursorWidget := NewHiddenCursorContainer(layout)
+	// hiddenCursorWidget := NewHiddenCursorContainer(layout)
 
-	pf.window.SetContent(hiddenCursorWidget)
-	pf.window.SetFullScreen(true)
+	pf.window.SetContent(layout)
+	// pf.window.SetFullScreen(true)
 	pf.window.CenterOnScreen()
 
 	go func() {
-		time.Sleep(3 * time.Second)
 		pf.window.Canvas().SetOnTypedKey(func(event *fyne.KeyEvent) {
 			switch event.Name {
 			case fyne.KeyLeft:
@@ -80,8 +81,20 @@ func (pf *PhotoFrame) setupUI() {
 func (pf *PhotoFrame) loadImage(path string) {
 	// pf.imageView = canvas.NewImageFromURI(s3URI)
 
+	// image := canvas.NewImageFromFile(path)
+	// pf.imageView.FillMode = canvas.ImageFillContain
+	// pf.imageView.Image = image
+	// pf.imageView.Refresh()
+	// fmt.Println("loadImage.canvasLoaded")
+	// pf.imageView.File = path
+	// fmt.Println("loadImage.refreshed")
+	// uri, err := storage.ParseURI(path)
+	// if err != nil {
+	// 	panic(fmt.Sprintf("Error parsing %s", c.photoUrl))
+	// }
+	// image := canvas.NewImageFromURI(uri)
+	// image.FillMode = canvas.ImageFillContain
 	pf.imageView.File = path
-	pf.imageView.FillMode = canvas.ImageFillContain
 	pf.imageView.Refresh()
 }
 
@@ -91,8 +104,8 @@ func (pf *PhotoFrame) nextImage() {
 	}
 
 	pf.currentIdx = (pf.currentIdx + 1) % len(pf.images)
+	fmt.Println("Loading Next image:", pf.images[pf.currentIdx])
 	pf.loadImage(pf.images[pf.currentIdx])
-	fmt.Println("Next image:", pf.images[pf.currentIdx])
 }
 
 func (pf *PhotoFrame) previousImage() {
@@ -101,14 +114,11 @@ func (pf *PhotoFrame) previousImage() {
 	}
 
 	pf.currentIdx = (pf.currentIdx - 1 + len(pf.images)) % len(pf.images)
+	fmt.Println("Loading previous image", pf.images[pf.currentIdx])
 	pf.loadImage(pf.images[pf.currentIdx])
-	fmt.Println("Previous image:", pf.images[pf.currentIdx])
 }
 
 func (pf *PhotoFrame) loadImagesFromS3() {
-	// TODO: Implement S3 sync logic here
-	// For now, add some dummy images for testing
-
 	ex, err := os.Executable()
 	if err != nil {
 		panic(err)
@@ -145,6 +155,13 @@ func (pf *PhotoFrame) run() {
 }
 
 func main() {
+	server := NewSetupServer()
+
+	if err := server.Start(); err != nil {
+		log.Fatalf("Failed to start BLE server: %v", err)
+	}
+	log.Println("BLE server running. Press Ctrl+C to exit.")
+
 	frame := NewPhotoFrame()
 	frame.run()
 }

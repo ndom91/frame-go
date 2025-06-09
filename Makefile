@@ -1,7 +1,7 @@
 .PHONY: build-arm build-native clean deploy test flake-build help
 
 # Configuration
-PI_HOST ?= pi@10.0.1.44
+PI_HOST ?= pi@10.0.1.10
 PI_TARGET_DIR ?= /home/pi
 BINARY_NAME = photo-frame
 
@@ -29,7 +29,7 @@ build-arm:
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
 
 # Build for native system
-build-native: dev-native
+build-native:
 	@echo -e "\n🔨 Building for native system..."
 	go build -o ${BINARY_NAME} .
 	@echo "✅ Native binary ready: ${BINARY_NAME}"
