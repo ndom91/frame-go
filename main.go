@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"os"
 	"path/filepath"
@@ -43,6 +44,9 @@ func (pf *PhotoFrame) setupUI() {
 	pf.imageView.FillMode = canvas.ImageFillContain
 	pf.imageView.ScaleMode = canvas.ImageScaleSmooth
 
+	// Create black background rectangle
+	blackBg := canvas.NewRectangle(color.Black)
+
 	leftZone := widget.NewButton("", func() {
 		pf.previousImage()
 	})
@@ -56,12 +60,12 @@ func (pf *PhotoFrame) setupUI() {
 	buttonLayout := container.NewAdaptiveGrid(2)
 	buttonLayout.Add(leftZone)
 	buttonLayout.Add(rightZone)
-	layout := container.New(layout.NewStackLayout(), pf.imageView, buttonLayout)
+	layout := container.New(layout.NewStackLayout(), blackBg, pf.imageView, buttonLayout)
 
 	// hiddenCursorWidget := NewHiddenCursorContainer(layout)
 
 	pf.window.SetContent(layout)
-	// pf.window.SetFullScreen(true)
+	pf.window.SetFullScreen(true)
 	pf.window.CenterOnScreen()
 
 	go func() {
