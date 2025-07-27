@@ -1,5 +1,7 @@
 .direnv
 *.bak
+.env
+config.json
 images/
 vendor/
 photo-frame

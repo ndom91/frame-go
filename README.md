@@ -24,6 +24,15 @@ sudo apt update
 sudo apt install libgl1-mesa-dev libxrandr-dev libxcursor-dev libxinerama-dev libxi-dev libxxf86vm-dev
 ```
 
+### Environment Variables
+
+```
+S3_BUCKET_NAME=
+AWS_ACCESS_KEY=
+AWS_SECRET_KEY=
+AWS_SESSION_TOKEN=
+```
+
 ## Develop
 
 ```bash

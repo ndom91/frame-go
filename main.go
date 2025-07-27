@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image/color"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -13,8 +17,11 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
-	// "fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/joho/godotenv"
 )
 
 type PhotoFrame struct {
@@ -23,19 +30,55 @@ type PhotoFrame struct {
 	imageView  *canvas.Image
 	currentIdx int
 	images     []string
+	s3Client   *s3.Client
+	bucketName string
+	imagesDir  string
+	syncMutex  sync.RWMutex
 }
 
 func NewPhotoFrame() *PhotoFrame {
+	godotenv.Load()
 	a := app.New()
 	a.Settings().SetTheme(&CustomTheme{})
 
 	w := a.NewWindow("Domino Frame")
+
+	// Initialize S3 client
+	staticProvider := credentials.NewStaticCredentialsProvider(
+		os.Getenv("AWS_ACCESS_KEY"),
+		os.Getenv("AWS_SECRET_KEY"),
+		os.Getenv("AWS_SESSION_TOKEN"),
+	)
+	cfg, err := config.LoadDefaultConfig(
+		context.Background(),
+		config.WithCredentialsProvider(staticProvider),
+	)
+	if err != nil {
+		log.Printf("Unable to load SDK config: %v", err)
+	}
+	s3Client := s3.NewFromConfig(cfg)
+
+	// Get executable path for images directory
+	ex, err := os.Executable()
+	if err != nil {
+		log.Printf("Error getting executable path: %v", err)
+	}
+	exPath := filepath.Dir(ex)
+	imagesDir := filepath.Join(exPath, "images")
+
+	// Create images directory if it doesn't exist
+	if err := os.MkdirAll(imagesDir, 0755); err != nil {
+		log.Printf("Image path didn't exist; Error creating images directory: %v", err)
+	}
 
 	return &PhotoFrame{
 		app:        a,
 		window:     w,
 		currentIdx: 0,
 		images:     []string{},
+		s3Client:   s3Client,
+		bucketName: os.Getenv("S3_BUCKET_NAME"), // Configure via environment variable
+		imagesDir:  imagesDir,
 	}
 }
 
@@ -66,7 +109,14 @@ func (pf *PhotoFrame) setupUI() {
 
 	pf.window.SetContent(layout)
 	pf.window.SetPadded(false)
-	pf.window.SetFullScreen(true)
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Printf("Error getting hostname", err)
+	}
+	// Hacky way to only go fullscreen on non-development machines
+	if hostname != "ndo-gb" {
+		pf.window.SetFullScreen(true)
+	}
 	pf.window.CenterOnScreen()
 
 	go func() {
@@ -104,6 +154,9 @@ func (pf *PhotoFrame) loadImage(path string) {
 }
 
 func (pf *PhotoFrame) nextImage() {
+	pf.syncMutex.RLock()
+	defer pf.syncMutex.RUnlock()
+
 	if len(pf.images) == 0 {
 		return
 	}
@@ -114,6 +167,9 @@ func (pf *PhotoFrame) nextImage() {
 }
 
 func (pf *PhotoFrame) previousImage() {
+	pf.syncMutex.RLock()
+	defer pf.syncMutex.RUnlock()
+
 	if len(pf.images) == 0 {
 		return
 	}
@@ -123,21 +179,114 @@ func (pf *PhotoFrame) previousImage() {
 	pf.loadImage(pf.images[pf.currentIdx])
 }
 
-func (pf *PhotoFrame) loadImagesFromS3() {
-	ex, err := os.Executable()
-	if err != nil {
-		panic(err)
-	}
-	exPath := filepath.Dir(ex)
+func (pf *PhotoFrame) syncS3Images() error {
+	pf.syncMutex.Lock()
+	defer pf.syncMutex.Unlock()
 
-	pf.images = []string{
-		exPath + "/images/image1.jpg",
-		exPath + "/images/image2.jpg",
-		exPath + "/images/image3.jpg",
+	if pf.bucketName == "" {
+		log.Println("S3_BUCKET_NAME not set, skipping S3 sync")
+		return pf.loadLocalImages()
 	}
+
+	// List objects in S3 bucket
+	result, err := pf.s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
+		Bucket: &pf.bucketName,
+	})
+	if err != nil {
+		log.Printf("Failed to list S3 objects: %v", err)
+		return pf.loadLocalImages()
+	}
+
+	// Filter for image files
+	s3Images := make(map[string]bool)
+	for _, obj := range result.Contents {
+		key := *obj.Key
+		if pf.isImageFile(key) {
+			s3Images[key] = true
+
+			// Download if not exists locally
+			localPath := filepath.Join(pf.imagesDir, key)
+			if _, err := os.Stat(localPath); os.IsNotExist(err) {
+				if err := pf.downloadS3Object(key, localPath); err != nil {
+					log.Printf("Failed to download %s: %v", key, err)
+				}
+			}
+		}
+	}
+
+	// Remove local files that no longer exist in S3
+	files, err := os.ReadDir(pf.imagesDir)
+	if err != nil {
+		log.Printf("Failed to read images directory: %v", err)
+	} else {
+		for _, file := range files {
+			if !file.IsDir() && pf.isImageFile(file.Name()) {
+				if !s3Images[file.Name()] {
+					localPath := filepath.Join(pf.imagesDir, file.Name())
+					if err := os.Remove(localPath); err != nil {
+						log.Printf("Failed to remove %s: %v", localPath, err)
+					}
+				}
+			}
+		}
+	}
+
+	return pf.loadLocalImages()
+}
+
+func (pf *PhotoFrame) isImageFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp"
+}
+
+func (pf *PhotoFrame) downloadS3Object(key, localPath string) error {
+	result, err := pf.s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: &pf.bucketName,
+		Key:    &key,
+	})
+	if err != nil {
+		return err
+	}
+	defer result.Body.Close()
+
+	// Create local file
+	file, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Copy S3 object to local file
+	_, err = io.Copy(file, result.Body)
+	return err
+}
+
+func (pf *PhotoFrame) loadLocalImages() error {
+	files, err := os.ReadDir(pf.imagesDir)
+	if err != nil {
+		return err
+	}
+
+	images := []string{}
+	for _, file := range files {
+		if !file.IsDir() && pf.isImageFile(file.Name()) {
+			images = append(images, filepath.Join(pf.imagesDir, file.Name()))
+		}
+	}
+
+	pf.syncMutex.Lock()
+	pf.images = images
+	pf.syncMutex.Unlock()
 
 	if len(pf.images) > 0 {
 		pf.loadImage(pf.images[0])
+	}
+	return nil
+}
+
+func (pf *PhotoFrame) loadImagesFromS3() {
+	if err := pf.syncS3Images(); err != nil {
+		log.Printf("Failed to sync S3 images: %v", err)
 	}
 }
 
@@ -152,9 +301,31 @@ func (pf *PhotoFrame) startSlideshow(interval time.Duration) {
 	}()
 }
 
+func (pf *PhotoFrame) startS3Sync() {
+	// Initial sync
+	go func() {
+		if err := pf.syncS3Images(); err != nil {
+			log.Printf("Initial S3 sync failed: %v", err)
+		}
+	}()
+
+	// Periodic sync every 10 minutes
+	syncTicker := time.NewTicker(10 * time.Minute)
+	go func() {
+		for range syncTicker.C {
+			log.Println("Starting periodic S3 sync...")
+			if err := pf.syncS3Images(); err != nil {
+				log.Printf("Periodic S3 sync failed: %v", err)
+			} else {
+				log.Println("S3 sync completed successfully")
+			}
+		}
+	}()
+}
+
 func (pf *PhotoFrame) run() {
 	pf.setupUI()
-	pf.loadImagesFromS3()
+	pf.startS3Sync()
 	pf.startSlideshow(10 * time.Second)
 	pf.window.ShowAndRun()
 }
