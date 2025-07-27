@@ -43,6 +43,7 @@ make build-arm
 For local dev environments
 
 ```bash
+make dev-native
 make build-native
 ```
 
