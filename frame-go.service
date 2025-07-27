@@ -8,9 +8,10 @@ Type=simple
 User=root
 WorkingDirectory=/home/pi
 Environment=DISPLAY=:0
-Environment=S3_BUCKET_NAME=your-bucket-name
-Environment=AWS_ACCESS_KEY=access-key
-Environment=AWS_SECRET_KEY=secret-key
+Environment=R2_BUCKET_NAME=your-bucket-name
+Environment=R2_ACCESS_KEY=access-key
+Environment=R2_SECRET_KEY=secret-key
+Environment=CF_ACCOUNT_ID=cf-account-id
 ExecStart=/home/pi/photo-frame
 Restart=always
 RestartSec=5
