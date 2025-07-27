@@ -31,10 +31,12 @@ type WiFiCredentials struct {
 }
 
 type FrameConfig struct {
-	Name        string `json:"name"`
-	FrameID     string `json:"frame_id"`
-	APIEndpoint string `json:"api_endpoint"`
-	S3Bucket    string `json:"s3_bucket"`
+	Name          string `json:"name"`
+	FrameID       string `json:"frame_id"`
+	APIEndpoint   string `json:"api_endpoint"`
+	S3Bucket      string `json:"s3_bucket"`
+	CreatedAt     string `json:"created_at"`
+	LastStartedAt string `json:"last_started_at"`
 }
 
 type SetupServer struct {
@@ -53,7 +55,7 @@ type SetupServer struct {
 	statusMessage string
 
 	// Generated frame ID
-	frameID string
+	frameId string
 
 	// Configuration storage
 	configData map[string]any
@@ -74,14 +76,6 @@ func NewSetupServer() *SetupServer {
 		configData:    make(map[string]any),
 	}
 
-	// Generate a random frame ID
-	server.frameID = randomString(7)
-	log.Printf("Generated Frame ID: %s", server.frameID)
-
-	// Save the frame ID immediately
-	server.saveConfigValue("frame_id", server.frameID)
-	server.saveConfigValue("created_at", time.Now().Format(time.RFC3339))
-
 	return server
 }
 
@@ -91,17 +85,23 @@ func (s *SetupServer) Start() error {
 		log.Printf("Warning: Could not load existing config: %v", err)
 	}
 
+	// Update last started time AFTER loading existing config
+	s.saveConfigValue("last_started_at", time.Now().Format(time.RFC3339))
+
 	// Check if we already have a frame_id, if not generate one
-	if _, exists := s.getConfigValue("frame_id"); !exists {
-		s.saveConfigValue("frame_id", s.frameID)
-	} else {
+	if existingID, exists := s.getConfigValue("frame_id"); exists {
 		// Use existing frame_id
-		if existingID, exists := s.getConfigValue("frame_id"); exists {
-			if idStr, ok := existingID.(string); ok {
-				s.frameID = idStr
-				log.Printf("Using existing Frame ID: %s", s.frameID)
-			}
+		if idStr, ok := existingID.(string); ok {
+			s.frameId = idStr
+			log.Printf("Using existing Frame ID: %s", s.frameId)
 		}
+	} else {
+		// Generate new frame_id
+		newFrameId := randomString(7)
+		s.frameId = newFrameId
+		s.saveConfigValue("frame_id", newFrameId)
+		s.saveConfigValue("created_at", time.Now().Format(time.RFC3339))
+		log.Printf("Generated new Frame ID: %s", s.frameId)
 	}
 
 	s.adapter = bluetooth.DefaultAdapter
@@ -188,7 +188,7 @@ func (s *SetupServer) Start() error {
 	// Start advertising
 	adv := s.adapter.DefaultAdvertisement()
 	err = adv.Configure(bluetooth.AdvertisementOptions{
-		LocalName:    "DominoFrame-" + s.frameID,
+		LocalName:    "DominoFrame-" + s.frameId,
 		ServiceUUIDs: []bluetooth.UUID{serviceUUID},
 	})
 	if err != nil {
@@ -201,7 +201,7 @@ func (s *SetupServer) Start() error {
 	}
 
 	// s.saveConfiguration()
-	log.Println("BLE GATT server started, advertising as \"DominoFrame-" + s.frameID + "\"")
+	log.Println("BLE GATT server started, advertising as \"DominoFrame-" + s.frameId + "\"")
 	s.updateStatus("Ready for setup")
 
 	return nil
@@ -235,7 +235,7 @@ func (s *SetupServer) handleFrameConfig(data []byte) {
 	}
 
 	s.frameConfig = &config
-	log.Printf("Frame config received - Name: %s, ID: %s", s.frameConfig.Name, s.frameID)
+	log.Printf("Frame config received - Name: %s, ID: %s", s.frameConfig.Name, s.frameId)
 	s.updateStatus("Frame config received")
 	s.notifyStatusUpdate()
 }
@@ -411,6 +411,7 @@ func (s *SetupServer) loadConfigFile() error {
 		panic(err)
 	}
 	exPath := filepath.Dir(ex)
+
 	data, err := os.ReadFile(exPath + "/config.json")
 	if err != nil {
 		if os.IsNotExist(err) {

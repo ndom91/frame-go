@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -34,29 +35,36 @@ type PhotoFrame struct {
 	bucketName string
 	imagesDir  string
 	syncMutex  sync.RWMutex
+	frameId    string
 }
 
-func NewPhotoFrame() *PhotoFrame {
+func NewPhotoFrame(server *SetupServer) *PhotoFrame {
 	godotenv.Load()
+
 	a := app.New()
 	a.Settings().SetTheme(&CustomTheme{})
 
 	w := a.NewWindow("Domino Frame")
 
-	// Initialize S3 client
+	// Initialize S3 client for Cloudflare R2
 	staticProvider := credentials.NewStaticCredentialsProvider(
-		os.Getenv("AWS_ACCESS_KEY"),
-		os.Getenv("AWS_SECRET_KEY"),
-		os.Getenv("AWS_SESSION_TOKEN"),
+		os.Getenv("R2_ACCESS_KEY"),
+		os.Getenv("R2_SECRET_KEY"),
+		"", // No session token needed for R2
 	)
 	cfg, err := config.LoadDefaultConfig(
 		context.Background(),
 		config.WithCredentialsProvider(staticProvider),
+		config.WithRegion("auto"),
 	)
 	if err != nil {
 		log.Printf("Unable to load SDK config: %v", err)
 	}
-	s3Client := s3.NewFromConfig(cfg)
+
+	// Configure R2 endpoint
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(fmt.Sprintf("https://%s.r2.cloudflarestorage.com", os.Getenv("CF_ACCOUNT_ID")))
+	})
 
 	// Get executable path for images directory
 	ex, err := os.Executable()
@@ -64,7 +72,7 @@ func NewPhotoFrame() *PhotoFrame {
 		log.Printf("Error getting executable path: %v", err)
 	}
 	exPath := filepath.Dir(ex)
-	imagesDir := filepath.Join(exPath, "images")
+	imagesDir := filepath.Join(exPath, "images", server.frameId)
 
 	// Create images directory if it doesn't exist
 	if err := os.MkdirAll(imagesDir, 0755); err != nil {
@@ -77,8 +85,9 @@ func NewPhotoFrame() *PhotoFrame {
 		currentIdx: 0,
 		images:     []string{},
 		s3Client:   s3Client,
-		bucketName: os.Getenv("S3_BUCKET_NAME"), // Configure via environment variable
+		bucketName: os.Getenv("R2_BUCKET_NAME"),
 		imagesDir:  imagesDir,
+		frameId:    server.frameId,
 	}
 }
 
@@ -111,7 +120,7 @@ func (pf *PhotoFrame) setupUI() {
 	pf.window.SetPadded(false)
 	hostname, err := os.Hostname()
 	if err != nil {
-		log.Printf("Error getting hostname", err)
+		log.Printf("Error getting hostname")
 	}
 	// Hacky way to only go fullscreen on non-development machines
 	if hostname != "ndo-gb" {
@@ -149,6 +158,7 @@ func (pf *PhotoFrame) loadImage(path string) {
 	// }
 	// image := canvas.NewImageFromURI(uri)
 	// image.FillMode = canvas.ImageFillContain
+
 	pf.imageView.File = path
 	pf.imageView.Refresh()
 }
@@ -180,17 +190,14 @@ func (pf *PhotoFrame) previousImage() {
 }
 
 func (pf *PhotoFrame) syncS3Images() error {
-	pf.syncMutex.Lock()
-	defer pf.syncMutex.Unlock()
-
 	if pf.bucketName == "" {
 		log.Println("S3_BUCKET_NAME not set, skipping S3 sync")
 		return pf.loadLocalImages()
 	}
 
-	// List objects in S3 bucket
 	result, err := pf.s3Client.ListObjectsV2(context.Background(), &s3.ListObjectsV2Input{
 		Bucket: &pf.bucketName,
+		Prefix: &pf.frameId,
 	})
 	if err != nil {
 		log.Printf("Failed to list S3 objects: %v", err)
@@ -201,12 +208,18 @@ func (pf *PhotoFrame) syncS3Images() error {
 	s3Images := make(map[string]bool)
 	for _, obj := range result.Contents {
 		key := *obj.Key
+
+		// Remove frameId prefix (e.g. "dd3dk2a/filename.jpg" -> "filename.jpg")
+		prefix := pf.frameId + "/"
+		filename := strings.TrimPrefix(key, prefix)
+
 		if pf.isImageFile(key) {
-			s3Images[key] = true
+			s3Images[filename] = true
 
 			// Download if not exists locally
-			localPath := filepath.Join(pf.imagesDir, key)
+			localPath := filepath.Join(pf.imagesDir, filename)
 			if _, err := os.Stat(localPath); os.IsNotExist(err) {
+				log.Printf("Downloading image: %s", localPath)
 				if err := pf.downloadS3Object(key, localPath); err != nil {
 					log.Printf("Failed to download %s: %v", key, err)
 				}
@@ -219,10 +232,12 @@ func (pf *PhotoFrame) syncS3Images() error {
 	if err != nil {
 		log.Printf("Failed to read images directory: %v", err)
 	} else {
+		log.Printf("Deleting Files")
 		for _, file := range files {
 			if !file.IsDir() && pf.isImageFile(file.Name()) {
 				if !s3Images[file.Name()] {
 					localPath := filepath.Join(pf.imagesDir, file.Name())
+					log.Printf("Deleting file: %s", localPath)
 					if err := os.Remove(localPath); err != nil {
 						log.Printf("Failed to remove %s: %v", localPath, err)
 					}
@@ -236,7 +251,7 @@ func (pf *PhotoFrame) syncS3Images() error {
 
 func (pf *PhotoFrame) isImageFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif" || ext == ".bmp"
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".gif"
 }
 
 func (pf *PhotoFrame) downloadS3Object(key, localPath string) error {
@@ -281,14 +296,19 @@ func (pf *PhotoFrame) loadLocalImages() error {
 	if len(pf.images) > 0 {
 		pf.loadImage(pf.images[0])
 	}
+
+	if len(pf.images) == 0 {
+		log.Printf("No images available, exiting")
+		os.Exit(0)
+	}
 	return nil
 }
 
-func (pf *PhotoFrame) loadImagesFromS3() {
-	if err := pf.syncS3Images(); err != nil {
-		log.Printf("Failed to sync S3 images: %v", err)
-	}
-}
+// func (pf *PhotoFrame) loadImagesFromS3() {
+// 	if err := pf.syncS3Images(); err != nil {
+// 		log.Printf("Failed to sync S3 images: %v", err)
+// 	}
+// }
 
 func (pf *PhotoFrame) startSlideshow(interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -338,6 +358,6 @@ func main() {
 	}
 	log.Println("BLE server running. Press Ctrl+C to exit.")
 
-	frame := NewPhotoFrame()
+	frame := NewPhotoFrame(server)
 	frame.run()
 }
