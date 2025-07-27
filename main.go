@@ -65,6 +65,7 @@ func (pf *PhotoFrame) setupUI() {
 	// hiddenCursorWidget := NewHiddenCursorContainer(layout)
 
 	pf.window.SetContent(layout)
+	pf.window.SetPadded(false)
 	pf.window.SetFullScreen(true)
 	pf.window.CenterOnScreen()
 

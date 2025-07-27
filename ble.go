@@ -487,15 +487,16 @@ func (s *SetupServer) updateStatus(status string) {
 }
 
 func (s *SetupServer) updateStatusCharacteristic() {
+	log.Printf("updateStatusCharacteristic")
 	// // Update the characteristic value so it can be read by clients
-	statusBytes := []byte(s.getCurrentStatus())
+	// statusBytes := []byte(s.getCurrentStatus())
 
 	// // Write the current status to the characteristic
 	// // This makes it available for BLE read operations
-	err := s.statusChar.WriteWithoutResponse(statusBytes)
-	if err != nil {
-		log.Printf("Failed to update status characteristic: %v", err)
-	}
+	// err := s.statusChar.WriteWithoutResponse(statusBytes)
+	// if err != nil {
+	// 	log.Printf("Failed to update status characteristic: %v", err)
+	// }
 }
 
 func (s *SetupServer) notifyStatusUpdate() {
