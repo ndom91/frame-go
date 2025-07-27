@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,7 +56,7 @@ type SetupServer struct {
 	frameID string
 
 	// Configuration storage
-	configData map[string]interface{}
+	configData map[string]any
 }
 
 func randomString(length int) string {
@@ -67,16 +68,10 @@ func randomString(length int) string {
 	return string(result)
 }
 
-// func NewSetupServer() *SetupServer {
-// 	return &SetupServer{
-// 		statusMessage: "Ready for setup",
-// 	}
-// }
-
 func NewSetupServer() *SetupServer {
 	server := &SetupServer{
 		statusMessage: "Ready for setup",
-		configData:    make(map[string]interface{}),
+		configData:    make(map[string]any),
 	}
 
 	// Generate a random frame ID
@@ -164,11 +159,18 @@ func (s *SetupServer) Start() error {
 			{
 				Handle: &s.statusChar,
 				UUID:   statusUUID,
-				Flags:  bluetooth.CharacteristicReadPermission | bluetooth.CharacteristicNotifyPermission,
-				// ReadEvent: func(client bluetooth.Connection, offset int) ([]byte, error) {
-				// 	return []byte(s.getCurrentStatus()), nil
-				// },
+				Value:  []byte("Ready for setup"), // Initial value
+				Flags:  bluetooth.CharacteristicReadPermission,
+				// The value will be returned when clients read this characteristic
 			},
+			// {
+			// 	Handle: &s.statusChar,
+			// 	UUID:   statusUUID,
+			// 	Flags:  bluetooth.CharacteristicReadPermission | bluetooth.CharacteristicNotifyPermission,
+			// 	ReadEvent: func(client bluetooth.Connection, offset int) ([]byte, error) {
+			// 		return []byte(s.getCurrentStatus()), nil
+			// 	},
+			// },
 			{
 				Handle: &s.cmdChar,
 				UUID:   cmdUUID,
@@ -199,7 +201,7 @@ func (s *SetupServer) Start() error {
 	}
 
 	// s.saveConfiguration()
-	log.Println("BLE GATT server started, advertising as 'DominoFrame-'" + s.frameID)
+	log.Println("BLE GATT server started, advertising as \"DominoFrame-" + s.frameID + "\"")
 	s.updateStatus("Ready for setup")
 
 	return nil
@@ -233,7 +235,7 @@ func (s *SetupServer) handleFrameConfig(data []byte) {
 	}
 
 	s.frameConfig = &config
-	log.Printf("Frame config received - Name: %s, ID: %s", config.Name, config.FrameID)
+	log.Printf("Frame config received - Name: %s, ID: %s", s.frameConfig.Name, s.frameID)
 	s.updateStatus("Frame config received")
 	s.notifyStatusUpdate()
 }
@@ -257,6 +259,7 @@ func (s *SetupServer) handleCommand(data []byte) {
 }
 
 func (s *SetupServer) completeSetup() {
+	// TODO: Give UI feedback to the user on frame
 	log.Printf("Starting setup completion. WiFi creds: %v, Frame config: %v",
 		s.wifiCreds != nil, s.frameConfig != nil)
 
@@ -312,20 +315,21 @@ func (s *SetupServer) connectToWiFi() error {
 	if s.wifiCreds == nil {
 		return fmt.Errorf("no WiFi credentials provided")
 	}
+	fmt.Printf("WIFI U: %s; P: %s", s.wifiCreds.SSID, s.wifiCreds.Password)
 
 	// Use NetworkManager CLI (nmcli) - more reliable than wpa_cli
 	// First, check if the network already exists
-	cmd := exec.Command("nmcli", "connection", "show", s.wifiCreds.SSID)
+	cmd := exec.Command("sudo", "nmcli", "connection", "show", s.wifiCreds.SSID)
 	if err := cmd.Run(); err == nil {
 		// Connection exists, just modify it
-		cmd = exec.Command("nmcli", "connection", "modify", s.wifiCreds.SSID,
+		cmd = exec.Command("sudo", "nmcli", "connection", "modify", s.wifiCreds.SSID,
 			"wifi-sec.psk", s.wifiCreds.Password)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to modify existing connection: %v", err)
 		}
 	} else {
 		// Create new connection
-		cmd = exec.Command("nmcli", "device", "wifi", "connect", s.wifiCreds.SSID,
+		cmd = exec.Command("sudo", "nmcli", "device", "wifi", "connect", s.wifiCreds.SSID,
 			"password", s.wifiCreds.Password)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to connect to WiFi: %v", err)
@@ -336,7 +340,7 @@ func (s *SetupServer) connectToWiFi() error {
 	time.Sleep(3 * time.Second)
 
 	// Verify connection
-	cmd = exec.Command("nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi")
+	cmd = exec.Command("sudo", "nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to verify connection: %v", err)
@@ -359,13 +363,13 @@ func (s *SetupServer) connectToWiFi() error {
 }
 
 // saveConfigValue saves a single key-value pair to the configuration
-func (s *SetupServer) saveConfigValue(key string, value interface{}) error {
+func (s *SetupServer) saveConfigValue(key string, value any) error {
 	s.configData[key] = value
 	return s.writeConfigFile()
 }
 
 // saveConfigValues saves multiple key-value pairs to the configuration
-func (s *SetupServer) saveConfigValues(values map[string]interface{}) error {
+func (s *SetupServer) saveConfigValues(values map[string]any) error {
 	for key, value := range values {
 		s.configData[key] = value
 	}
@@ -373,7 +377,7 @@ func (s *SetupServer) saveConfigValues(values map[string]interface{}) error {
 }
 
 // getConfigValue retrieves a value from the configuration
-func (s *SetupServer) getConfigValue(key string) (interface{}, bool) {
+func (s *SetupServer) getConfigValue(key string) (any, bool) {
 	value, exists := s.configData[key]
 	return value, exists
 }
@@ -385,7 +389,13 @@ func (s *SetupServer) writeConfigFile() error {
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
 
-	err = os.WriteFile("./config.json", data, 0644)
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+
+	err = os.WriteFile(exPath+"/config.json", data, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to write config file: %v", err)
 	}
@@ -396,7 +406,12 @@ func (s *SetupServer) writeConfigFile() error {
 
 // loadConfigFile loads existing configuration from disk
 func (s *SetupServer) loadConfigFile() error {
-	data, err := os.ReadFile("./config.json")
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+	data, err := os.ReadFile(exPath + "/config.json")
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Println("No existing config file found, starting fresh")
@@ -420,8 +435,10 @@ func (s *SetupServer) saveConfiguration() error {
 		return fmt.Errorf("frame configuration is nil")
 	}
 
+	fmt.Printf("Saving configuration for frame: %s\n", s.frameConfig)
+
 	// Build configuration map with frame config + existing data
-	configUpdates := map[string]interface{}{
+	configUpdates := map[string]any{
 		"frame_name":     s.frameConfig.Name,
 		"api_endpoint":   s.frameConfig.APIEndpoint,
 		"s3_bucket":      s.frameConfig.S3Bucket,
@@ -466,13 +483,24 @@ func (s *SetupServer) resetSetup() {
 
 func (s *SetupServer) updateStatus(status string) {
 	s.statusMessage = status
+	s.updateStatusCharacteristic()
+}
+
+func (s *SetupServer) updateStatusCharacteristic() {
+	// // Update the characteristic value so it can be read by clients
+	statusBytes := []byte(s.getCurrentStatus())
+
+	// // Write the current status to the characteristic
+	// // This makes it available for BLE read operations
+	err := s.statusChar.WriteWithoutResponse(statusBytes)
+	if err != nil {
+		log.Printf("Failed to update status characteristic: %v", err)
+	}
 }
 
 func (s *SetupServer) notifyStatusUpdate() {
-	// Send notification to any connected clients
-	// In the TinyGo Bluetooth library, notifications would be sent
-	// to subscribed clients automatically when the characteristic is updated
-	log.Printf("Status update: %s", s.statusMessage)
+	// s.updateStatusCharacteristic()
+	log.Printf("Status updated: %s", s.statusMessage)
 }
 
 func (s *SetupServer) getCurrentStatus() string {
@@ -493,7 +521,6 @@ func (s *SetupServer) getCurrentStatus() string {
 
 func (s *SetupServer) Stop() {
 	if s.adapter != nil {
-		// Stop advertising and cleanup
 		log.Println("Stopping BLE server...")
 	}
 }
