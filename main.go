@@ -160,7 +160,10 @@ func (pf *PhotoFrame) loadImage(path string) {
 	// image.FillMode = canvas.ImageFillContain
 
 	pf.imageView.File = path
-	pf.imageView.Refresh()
+
+	fyne.Do(func() {
+		pf.imageView.Refresh()
+	})
 }
 
 func (pf *PhotoFrame) nextImage() {
@@ -232,7 +235,6 @@ func (pf *PhotoFrame) syncS3Images() error {
 	if err != nil {
 		log.Printf("Failed to read images directory: %v", err)
 	} else {
-		log.Printf("Deleting Files")
 		for _, file := range files {
 			if !file.IsDir() && pf.isImageFile(file.Name()) {
 				if !s3Images[file.Name()] {
