@@ -21,8 +21,15 @@ For development, all prerequisites are included in the `devShell`'s in the `flak
 
 ```bash
 sudo apt update
-sudo apt install libgl1-mesa-dev libxrandr-dev libxcursor-dev libxinerama-dev libxi-dev libxxf86vm-dev
+sudo apt install libgl1-mesa-dev libxrandr-dev libxcursor-dev libxinerama-dev libxi-dev libxxf86vm-dev unclutter
 ```
+
+Add the `frame-go.service` and `unclutter.service` unit files from the
+`services/` directory in this repository to your target system and don't forget
+to open these files and adjust any variables that may need adjusting, like
+environment variables and file paths. The first service is meant to start the
+`frame-go` binary itself, and `unclutter` is an application designed to hide the
+mouse cursor in fullscreen applications.
 
 ### Environment Variables
 

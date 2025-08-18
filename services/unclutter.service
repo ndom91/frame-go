@@ -1,0 +1,14 @@
+[Unit]
+Description=Unclutter
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+ExecStart=unclutter -display :0 -idle 3 -jitter 5
+User=pi
+
+[Install]
+WantedBy=graphical-session.target
