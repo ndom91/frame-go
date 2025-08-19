@@ -7,7 +7,7 @@ Wants=graphical-session.target
 Type=simple
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/pi/.Xauthority
-ExecStart=unclutter -display :0 -idle 3 -jitter 5
+ExecStart=unclutter -idle 3 -jitter 5
 User=pi
 
 [Install]
