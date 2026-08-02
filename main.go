@@ -26,16 +26,55 @@ import (
 )
 
 type PhotoFrame struct {
-	app        fyne.App
-	window     fyne.Window
-	imageView  *canvas.Image
-	currentIdx int
-	images     []string
-	s3Client   *s3.Client
-	bucketName string
-	imagesDir  string
-	syncMutex  sync.RWMutex
-	frameId    string
+	app            fyne.App
+	window         fyne.Window
+	imageView      *canvas.Image
+	imageMotion    *fyne.Animation
+	imageLayout    *kenBurnsLayout
+	motionSequence int
+	currentIdx     int
+	images         []string
+	s3Client       *s3.Client
+	bucketName     string
+	imagesDir      string
+	syncMutex      sync.RWMutex
+	frameId        string
+}
+
+type kenBurnsLayout struct {
+	image     *canvas.Image
+	size      fyne.Size
+	progress  float32
+	direction fyne.Position
+}
+
+func (l *kenBurnsLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
+	l.size = size
+	l.updateImage()
+}
+
+func (l *kenBurnsLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(1, 1)
+}
+
+func (l *kenBurnsLayout) setProgress(progress float32) {
+	l.progress = progress
+	l.updateImage()
+}
+
+func (l *kenBurnsLayout) updateImage() {
+	const zoom = 0.025
+
+	scale := float32(1) + zoom*l.progress
+	imageSize := fyne.NewSize(l.size.Width*scale, l.size.Height*scale)
+	extraWidth := imageSize.Width - l.size.Width
+	extraHeight := imageSize.Height - l.size.Height
+
+	// Keep the image almost centered while it drifts into a different crop.
+	x := -extraWidth/2 + l.direction.X*extraWidth/4
+	y := -extraHeight/2 + l.direction.Y*extraHeight/4
+	l.image.Move(fyne.NewPos(x, y))
+	l.image.Resize(imageSize)
 }
 
 func NewPhotoFrame(server *SetupServer) *PhotoFrame {
@@ -95,6 +134,8 @@ func (pf *PhotoFrame) setupUI() {
 	pf.imageView = canvas.NewImageFromResource(nil)
 	pf.imageView.FillMode = canvas.ImageFillContain
 	pf.imageView.ScaleMode = canvas.ImageScaleSmooth
+	pf.imageLayout = &kenBurnsLayout{image: pf.imageView}
+	imageLayer := container.New(pf.imageLayout, pf.imageView)
 
 	// Create black background rectangle
 	blackBg := canvas.NewRectangle(color.Black)
@@ -112,7 +153,7 @@ func (pf *PhotoFrame) setupUI() {
 	buttonLayout := container.NewAdaptiveGrid(2)
 	buttonLayout.Add(leftZone)
 	buttonLayout.Add(rightZone)
-	layout := container.New(layout.NewStackLayout(), blackBg, pf.imageView, buttonLayout)
+	layout := container.New(layout.NewStackLayout(), blackBg, imageLayer, buttonLayout)
 
 	// hiddenCursorWidget := NewHiddenCursorContainer(layout)
 
@@ -163,7 +204,28 @@ func (pf *PhotoFrame) loadImage(path string) {
 
 	fyne.Do(func() {
 		pf.imageView.Refresh()
+		pf.startImageMotion()
 	})
+}
+
+func (pf *PhotoFrame) startImageMotion() {
+	if pf.imageMotion != nil {
+		pf.imageMotion.Stop()
+	}
+
+	directions := []fyne.Position{
+		fyne.NewPos(-1, -1),
+		fyne.NewPos(1, -1),
+		fyne.NewPos(1, 1),
+		fyne.NewPos(-1, 1),
+	}
+	pf.imageLayout.direction = directions[pf.motionSequence%len(directions)]
+	pf.motionSequence++
+	pf.imageLayout.setProgress(0)
+
+	pf.imageMotion = fyne.NewAnimation(10*time.Second, pf.imageLayout.setProgress)
+	pf.imageMotion.Curve = fyne.AnimationLinear
+	pf.imageMotion.Start()
 }
 
 func (pf *PhotoFrame) nextImage() {
