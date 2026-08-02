@@ -1,5 +1,5 @@
 [Unit]
-Description=Frame-Go Application
+Description=Domino Frame Application
 After=graphical-session.target
 Wants=graphical-session.target
 

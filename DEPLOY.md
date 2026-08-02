@@ -34,7 +34,7 @@ On Linux, `make deploy` builds and copies the binary. Override `PI_HOST` and `PI
 
 ## Configure the service
 
-Review `services/frame-go.service` before installation. Set `User`, `WorkingDirectory`, `DISPLAY`, `ExecStart`, and these Cloudflare R2 values for the target:
+Review `services/domino-frame.service` before installation. Set `User`, `WorkingDirectory`, `DISPLAY`, `ExecStart`, and these Cloudflare R2 values for the target:
 
 ```ini
 Environment=R2_BUCKET_NAME=your-bucket-name
@@ -46,15 +46,15 @@ Environment=CF_ACCOUNT_ID=cloudflare-account-id
 Install the application service and the cursor-hiding service:
 
 ```bash
-sudo cp services/frame-go.service /etc/systemd/system/frame-go.service
+sudo cp services/domino-frame.service /etc/systemd/system/domino-frame.service
 sudo cp services/unclutter.service /etc/systemd/system/unclutter.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now frame-go unclutter
+sudo systemctl enable --now domino-frame unclutter
 ```
 
 Check the application with:
 
 ```bash
-systemctl status frame-go
-journalctl -u frame-go -f
+systemctl status domino-frame
+journalctl -u domino-frame -f
 ```
