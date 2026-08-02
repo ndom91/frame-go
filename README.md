@@ -1,6 +1,6 @@
-# Domino Frame
+# 🖼️ Domino Frame
 
-Domino Frame is a fullscreen photo-frame application for low-power Linux devices, including the Raspberry Pi Zero 2 W.
+Domino Frame is a fullscreen photo-frame application for low-power Linux devices, such as the Raspberry Pi Zero 2 W. Requires the [Domino Frame Web](https://github.com/ndom91/domino-frame-web) app to manage deployments.
 
 ## Features
 
