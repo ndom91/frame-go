@@ -1,9 +1,10 @@
-.PHONY: build-arm build-native clean deploy test flake-build help
+.PHONY: build-arm build-arm-docker build-native clean deploy test flake-build help
 
 # Configuration
 PI_HOST ?= pi@10.0.1.10
 PI_TARGET_DIR ?= /home/pi
 BINARY_NAME = photo-frame
+FYNE_CROSS ?= $(shell go env GOPATH)/bin/fyne-cross
 
 # Default target
 help:
@@ -11,6 +12,7 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build-arm     - Cross-compile for ARM (Pi Zero 2W)"
+	@echo "  build-arm-docker - Cross-compile for ARM using fyne-cross"
 	@echo "  build-native  - Build for current system"
 	@echo "  flake-build   - Build using Nix flake"
 	@echo "  test          - Run tests"
@@ -27,6 +29,11 @@ build-arm:
 	@echo -e "\n🔨 Cross-compiling for ARM..."
 	@GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-unknown-linux-gnu-gcc go build -v -ldflags="-s -w -a -I=/lib/ld-linux-aarch64.so.1"  -o ${BINARY_NAME}-arm .
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
+
+# Cross-compile for ARM using the fyne-cross Docker image.
+build-arm-docker:
+	${FYNE_CROSS} linux -arch=arm64 -output ${BINARY_NAME}-arm .
+	tar -xJOf fyne-cross/dist/linux-arm64/${BINARY_NAME}-arm.tar.xz usr/local/bin/${BINARY_NAME} > ${BINARY_NAME}-arm
 
 # Build for native system
 build-native:
@@ -52,7 +59,7 @@ build-native:
 clean:
 	@echo "🧹 Cleaning up..."
 	rm -f ${BINARY_NAME} ${BINARY_NAME}-arm ${BINARY_NAME}-native
-	rm -rf result
+	rm -rf result fyne-cross
 	go clean
 
 # Deploy to Raspberry Pi

@@ -1,79 +1,22 @@
-# 🖼 Photo Frame App
+# Domino Frame
 
-Smart picture frame application designed to run on low-power hardware like a
-Raspbery Pi Zero 2W.
+Domino Frame is a fullscreen photo-frame application for low-power Linux devices, including the Raspberry Pi Zero 2 W.
 
-When the application starts, it will run in fullscreen and expose a TikTok-like navigation
-interface where the left / right halves of the screen are touch areas for going
-backward / forward in the images.
+## Features
 
-## Prerequisites
+- Displays a local photo collection in a fullscreen Fyne application.
+- Supports touch and keyboard navigation. Tap the left or right half of the display, or use the arrow keys.
+- Advances images automatically every 10 seconds.
+- Syncs each frame's images from a Cloudflare R2 bucket every 10 minutes and keeps a local cache for offline use.
+- Provides a Bluetooth Low Energy setup service for Wi-Fi credentials and frame configuration.
 
-For development, all prerequisites are included in the `devShell`'s in the `flake.nix`.
+Images are stored under `images/<frame-id>` beside the executable. The frame ID is generated on first start and kept in `config.json`.
 
-### Target Device
+## Documentation
 
-```bash
-sudo apt update
-sudo apt install libgl1-mesa-dev libxrandr-dev libxcursor-dev libxinerama-dev libxi-dev libxxf86vm-dev unclutter
-```
-
-Add the `frame-go.service` and `unclutter.service` unit files from the
-`services/` directory in this repository to your target system and don't forget
-to open these files and adjust any variables that may need adjusting, like
-environment variables and file paths. The first service is meant to start the
-`frame-go` binary itself, and `unclutter` is an application designed to hide the
-mouse cursor in fullscreen applications.
-
-### Environment Variables
-
-```
-S3_BUCKET_NAME=
-AWS_ACCESS_KEY=
-AWS_SECRET_KEY=
-AWS_SESSION_TOKEN=
-```
-
-## Develop
-
-```bash
-nix develop
-make build-native
-```
-
-## Build
-
-For ARM64 target devices
-
-```bash
-make dev-arm
-make build-arm
-```
-
-For local dev environments
-
-```bash
-make dev-native
-make build-native
-```
-
-## Deploy
-
-To deploy this application, simply copy the correct binary over to the target
-device. Then we'll just need to copy over and activate the systemd unit file to
-ensure it starts on boot. Don't forget to update the path to the binary in the
-`frame-go.service` unit file (in `ExecStart`).
-
-```bash
-sudo cp frame-go.service /etc/systemd/system/frame-go.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now frame-go
-```
-
-You should now have the fullscreen frame application running on the primary
-display of the machine.
+- [Development](DEVELOPMENT.md): Nix development shells and native or ARM builds.
+- [Deployment](DEPLOY.md): Raspberry Pi dependencies, configuration, and systemd services.
 
 ## License
 
 MIT
-

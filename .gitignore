@@ -1,3 +1,4 @@
+.DS_Store
 .direnv
 *.bak
 .env
@@ -8,3 +9,4 @@ photo-frame
 photo-frame-amd64
 photo-frame-arm
 result
+fyne-cross/
