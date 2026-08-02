@@ -8,5 +8,8 @@ vendor/
 photo-frame
 photo-frame-amd64
 photo-frame-arm
+domino-frame
+domino-frame-amd64
+domino-frame-arm
 result
 fyne-cross/

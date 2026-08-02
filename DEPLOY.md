@@ -15,11 +15,11 @@ The Bluetooth setup service connects to Wi-Fi with `nmcli`, so NetworkManager mu
 
 ## Build and copy
 
-On macOS, build with Docker and copy the extracted binary:
+On macOS, build with Docker and copy the binary:
 
 ```bash
-make build-arm-docker
-scp photo-frame-arm pi@<host>:/home/pi/photo-frame
+make build-arm
+scp domino-frame-arm pi@<host>:/home/pi/domino-frame
 ```
 
 On Linux with Nix, use the existing cross-compilation target:
@@ -27,7 +27,7 @@ On Linux with Nix, use the existing cross-compilation target:
 ```bash
 nix develop .#arm
 make build-arm
-scp photo-frame-arm pi@<host>:/home/pi/photo-frame
+scp domino-frame-arm pi@<host>:/home/pi/domino-frame
 ```
 
 On Linux, `make deploy` builds and copies the binary. Override `PI_HOST` and `PI_TARGET_DIR` as needed. That target currently uses `~/.ssh/id_ndo4`.

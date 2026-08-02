@@ -12,7 +12,7 @@ Environment=R2_BUCKET_NAME=your-bucket-name
 Environment=R2_ACCESS_KEY=access-key
 Environment=R2_SECRET_KEY=secret-key
 Environment=CF_ACCOUNT_ID=cf-account-id
-ExecStart=/home/pi/photo-frame
+ExecStart=/home/pi/domino-frame
 Restart=always
 RestartSec=5
 

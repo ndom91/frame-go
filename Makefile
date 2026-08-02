@@ -3,7 +3,7 @@
 # Configuration
 PI_HOST ?= pi@10.0.1.10
 PI_TARGET_DIR ?= /home/pi
-BINARY_NAME = photo-frame
+BINARY_NAME = domino-frame
 FYNE_CROSS ?= $(shell go env GOPATH)/bin/fyne-cross
 
 # Default target
@@ -24,10 +24,10 @@ help:
 	@echo "  PI_HOST=${PI_HOST}"
 	@echo "  PI_TARGET_DIR=${PI_TARGET_DIR}"
 
-# Cross-compile for ARM using Go directly
+# Build for ARM64 Linux using Docker's native ARM64 Linux environment.
 build-arm:
-	@echo -e "\n🔨 Cross-compiling for ARM..."
-	@GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC=aarch64-unknown-linux-gnu-gcc go build -v -ldflags="-s -w -a -I=/lib/ld-linux-aarch64.so.1"  -o ${BINARY_NAME}-arm .
+	@echo -e "\n🔨 Building for ARM64 Linux..."
+	@docker build --platform linux/arm64 --file Dockerfile.build-arm --output type=local,dest=. .
 	@echo "✅ ARM binary ready: ${BINARY_NAME}-arm"
 
 # Cross-compile for ARM using the fyne-cross Docker image.
