@@ -7,12 +7,6 @@ When the application starts, it will run in fullscreen and expose a TikTok-like 
 interface where the left / right halves of the screen are touch areas for going
 backward / forward in the images.
 
-Todos:
-
-- [ ] Implement S3 fetching of images instead of just local filesystem-based ones
-- [ ] Implement BLE GATT server so picture frames can be easily initialised by users in the
-  [frame-web](https://github.com/ndom91/frame-web) admin portal.
-
 ## Prerequisites
 
 For development, all prerequisites are included in the `devShell`'s in the `flake.nix`.
