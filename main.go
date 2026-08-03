@@ -229,7 +229,17 @@ func (pf *PhotoFrame) startCrossfade() {
 
 	incoming := pf.imageFront.Image
 
+	// Temporary. The fade animates a float uniform with no rounding involved, so
+	// it should be continuous -- if it visibly steps, the frames themselves are
+	// not arriving. loop.go ticks animations and draws 1:1, so counting callbacks
+	// counts painted frames. Reports the whole fade at once rather than per
+	// second, since the fade is shorter than a second and a half.
+	fadeFrames := 0
+	fadeStart := time.Now()
+
 	pf.imageFade = fyne.NewAnimation(crossfadeDuration, func(progress float32) {
+		fadeFrames++
+
 		pf.imageFront.Translucency = float64(1 - progress)
 		// Translucency alone doesn't mark anything dirty, and the SetDirty that
 		// Move relies on proved unreliable here, so ask for a real refresh.
@@ -238,6 +248,13 @@ func (pf *PhotoFrame) startCrossfade() {
 		if progress < 1 {
 			return
 		}
+
+		elapsed := time.Since(fadeStart)
+		log.Printf(
+			"crossfade: %d frames in %v (%.1f fps)",
+			fadeFrames, elapsed.Round(time.Millisecond),
+			float64(fadeFrames)/elapsed.Seconds(),
+		)
 
 		// Promote the finished photo to the back layer and park the front one
 		// transparent again, ready for the next arrival. The runner guarantees a
