@@ -48,6 +48,25 @@ type kenBurnsLayout struct {
 	direction fyne.Position
 }
 
+type tapZone struct {
+	widget.BaseWidget
+	onTapped func()
+}
+
+func newTapZone(onTapped func()) *tapZone {
+	zone := &tapZone{onTapped: onTapped}
+	zone.ExtendBaseWidget(zone)
+	return zone
+}
+
+func (z *tapZone) Tapped(_ *fyne.PointEvent) {
+	z.onTapped()
+}
+
+func (z *tapZone) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(canvas.NewRectangle(color.Transparent))
+}
+
 func (l *kenBurnsLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
 	l.size = size
 	l.updateImage()
@@ -140,15 +159,13 @@ func (pf *PhotoFrame) setupUI() {
 	// Create black background rectangle
 	blackBg := canvas.NewRectangle(color.Black)
 
-	leftZone := widget.NewButton("", func() {
+	leftZone := newTapZone(func() {
 		pf.previousImage()
 	})
-	leftZone.Importance = widget.LowImportance
 
-	rightZone := widget.NewButton("", func() {
+	rightZone := newTapZone(func() {
 		pf.nextImage()
 	})
-	rightZone.Importance = widget.LowImportance
 
 	buttonLayout := container.NewAdaptiveGrid(2)
 	buttonLayout.Add(leftZone)
