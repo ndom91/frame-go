@@ -242,6 +242,20 @@ func (pf *PhotoFrame) setupUI() {
 	}
 	pf.window.CenterOnScreen()
 
+	// Temporary, alongside the fps counter. Fyne rounds geometry in scaled units
+	// (roundToPixelCoords), so a canvas scale other than 1.0 makes the smallest
+	// possible movement larger than one device pixel -- which would cap how
+	// smooth the pan can ever be, independently of frame rate or distance.
+	go func() {
+		time.Sleep(2 * time.Second)
+		canvas := pf.window.Canvas()
+		log.Printf(
+			"canvas: scale=%.3f size=%.0fx%.0f (pixel quantum = %.2f device px)",
+			canvas.Scale(), canvas.Size().Width, canvas.Size().Height,
+			1/canvas.Scale(),
+		)
+	}()
+
 	go func() {
 		pf.window.Canvas().SetOnTypedKey(func(event *fyne.KeyEvent) {
 			switch event.Name {
