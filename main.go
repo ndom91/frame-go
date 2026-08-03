@@ -3,7 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"image"
 	"image/color"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"os"
@@ -242,12 +246,42 @@ func (pf *PhotoFrame) loadImage(path string) {
 	// image := canvas.NewImageFromURI(uri)
 	// image.FillMode = canvas.ImageFillContain
 
-	pf.imageView.File = path
+	// Decode once here rather than handing Fyne the path.
+	//
+	// canvas.Image.Resize branches on `isSVG || Image == nil`. With only File
+	// set, Image is nil, so every resize took the "rasterise at the new size"
+	// path -- which calls Refresh, which re-opens the file and decodes the JPEG
+	// again. The ken burns animation resizes on every frame, so the Pi was
+	// decoding a full JPEG off disk twice a second to shift the image ~1.3px.
+	// With Image populated, Resize instead takes the branch Fyne annotates as
+	// "just re-size using GPU scaling".
+	decoded, err := decodeImage(path)
+	if err != nil {
+		log.Printf("Failed to decode %s: %v", path, err)
+		return
+	}
 
 	fyne.Do(func() {
+		// File must be cleared: updateReader prefers it over Image and would
+		// still hit the disk on every Refresh.
+		pf.imageView.File = ""
+		pf.imageView.Resource = nil
+		pf.imageView.Image = decoded
+
 		pf.imageView.Refresh()
 		pf.startImageMotion()
 	})
+}
+
+func decodeImage(path string) (image.Image, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	decoded, _, err := image.Decode(file)
+	return decoded, err
 }
 
 func (pf *PhotoFrame) startImageMotion() {
