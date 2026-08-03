@@ -10,6 +10,7 @@ import (
 	_ "image/png"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
+	xdraw "golang.org/x/image/draw"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -110,10 +113,12 @@ func (l *kenBurnsLayout) setProgress(progress float32) {
 	}
 }
 
-func (l *kenBurnsLayout) updateImage() {
-	const zoom = 0.025
+// Fraction the image grows by over one slide. Also determines how much larger
+// than the panel a decoded image is kept, so the GPU only ever scales up.
+const kenBurnsZoom = 0.025
 
-	scale := float32(1) + zoom*l.progress
+func (l *kenBurnsLayout) updateImage() {
+	scale := float32(1) + kenBurnsZoom*l.progress
 	imageSize := fyne.NewSize(l.size.Width*scale, l.size.Height*scale)
 	extraWidth := imageSize.Width - l.size.Width
 	extraHeight := imageSize.Height - l.size.Height
@@ -181,7 +186,14 @@ func NewPhotoFrame(server *SetupServer) *PhotoFrame {
 func (pf *PhotoFrame) setupUI() {
 	pf.imageView = canvas.NewImageFromResource(nil)
 	pf.imageView.FillMode = canvas.ImageFillContain
-	pf.imageView.ScaleMode = canvas.ImageScaleSmooth
+	// Fastest, not Smooth. Smooth makes Fyne run draw.CatmullRom.Scale on the
+	// CPU every time the texture is invalidated (internal/painter/image.go),
+	// and the ken burns animation invalidates it on every frame -- which is
+	// what pinned the Pi to 2 fps. Fastest returns the pixels untouched and
+	// lets the GPU scale; it still filters with GL_LINEAR, so it is bilinear
+	// rather than nearest-neighbour. decodeImage does one good CatmullRom pass
+	// per slide so the GPU is only ever scaling up by the zoom fraction.
+	pf.imageView.ScaleMode = canvas.ImageScaleFastest
 	pf.imageLayout = &kenBurnsLayout{image: pf.imageView}
 	imageLayer := container.New(pf.imageLayout, pf.imageView)
 
@@ -255,7 +267,7 @@ func (pf *PhotoFrame) loadImage(path string) {
 	// decoding a full JPEG off disk twice a second to shift the image ~1.3px.
 	// With Image populated, Resize instead takes the branch Fyne annotates as
 	// "just re-size using GPU scaling".
-	decoded, err := decodeImage(path)
+	decoded, err := decodeImage(path, pf.imageLayout.size)
 	if err != nil {
 		log.Printf("Failed to decode %s: %v", path, err)
 		return
@@ -273,7 +285,14 @@ func (pf *PhotoFrame) loadImage(path string) {
 	})
 }
 
-func decodeImage(path string) (image.Image, error) {
+// decodeImage decodes a photo and, if it is larger than the panel needs,
+// downscales it once to just above panel size.
+//
+// This is the expensive resample, paid once per slide instead of once per frame.
+// Photos arrive up to 1920px wide from the web app's upload resize, and the
+// panel is 1024x600, so without this the GPU holds a texture with ~3x more
+// pixels than it can show.
+func decodeImage(path string, panel fyne.Size) (image.Image, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -281,7 +300,38 @@ func decodeImage(path string) (image.Image, error) {
 	defer file.Close()
 
 	decoded, _, err := image.Decode(file)
-	return decoded, err
+	if err != nil {
+		return nil, err
+	}
+
+	// Before the first Layout the panel size is unknown; keep full resolution
+	// rather than guessing at a target.
+	if panel.Width < 1 || panel.Height < 1 {
+		return decoded, nil
+	}
+
+	// Leave the zoom headroom in place, so the GPU scales up during the pan and
+	// never has to invent detail.
+	maxW := float64(panel.Width) * (1 + kenBurnsZoom)
+	maxH := float64(panel.Height) * (1 + kenBurnsZoom)
+
+	bounds := decoded.Bounds()
+	ratio := math.Min(maxW/float64(bounds.Dx()), maxH/float64(bounds.Dy()))
+	if ratio >= 1 {
+		return decoded, nil
+	}
+
+	target := image.Rect(
+		0, 0,
+		int(math.Round(float64(bounds.Dx())*ratio)),
+		int(math.Round(float64(bounds.Dy())*ratio)),
+	)
+	// CatmullRom here is deliberate: it's the good kernel, and paying for it
+	// once per slide is invisible against a 10s dwell. It is precisely what
+	// ImageScaleSmooth was running on every frame.
+	scaled := image.NewRGBA(target)
+	xdraw.CatmullRom.Scale(scaled, target, decoded, bounds, xdraw.Src, nil)
+	return scaled, nil
 }
 
 func (pf *PhotoFrame) startImageMotion() {
