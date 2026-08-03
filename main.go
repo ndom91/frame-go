@@ -35,10 +35,11 @@ import (
 type PhotoFrame struct {
 	app            fyne.App
 	window         fyne.Window
-	imageView      *canvas.Image
-	imageMotion    *fyne.Animation
-	imageLayout    *kenBurnsLayout
-	motionSequence int
+	// Two stacked layers: imageBack holds the photo currently on screen, and
+	// imageFront is the incoming one, faded in over the top.
+	imageBack      *canvas.Image
+	imageFront     *canvas.Image
+	imageFade      *fyne.Animation
 	currentIdx     int
 	images         []string
 	s3Client       *s3.Client
@@ -46,13 +47,6 @@ type PhotoFrame struct {
 	imagesDir      string
 	syncMutex      sync.RWMutex
 	frameId        string
-}
-
-type kenBurnsLayout struct {
-	image     *canvas.Image
-	size      fyne.Size
-	progress  float32
-	direction fyne.Position
 }
 
 type tapZone struct {
@@ -74,76 +68,15 @@ func (z *tapZone) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(canvas.NewRectangle(color.Transparent))
 }
 
-func (l *kenBurnsLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
-	l.size = size
-	l.updateImage()
-}
-
-func (l *kenBurnsLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
-	return fyne.NewSize(1, 1)
-}
-
-// Temporary instrumentation for diagnosing jerky motion. Fyne invokes
-// setProgress once per animation frame, so counting calls measures the
-// effective frame rate directly, and timing updateImage attributes the cost to
-// the per-frame image rescale. Remove once the motion is tuned.
-var (
-	motionFrames   int
-	motionSpent    time.Duration
-	motionWindowAt = time.Now()
-)
-
-func (l *kenBurnsLayout) setProgress(progress float32) {
-	l.progress = progress
-
-	// Animation callbacks all run on Fyne's main goroutine, so these counters
-	// need no synchronisation.
-	start := time.Now()
-	l.updateImage()
-	motionSpent += time.Since(start)
-	motionFrames++
-
-	if elapsed := time.Since(motionWindowAt); elapsed >= time.Second {
-		log.Printf(
-			"ken burns: %.1f fps, %.2f ms/frame in updateImage",
-			float64(motionFrames)/elapsed.Seconds(),
-			motionSpent.Seconds()*1000/float64(motionFrames),
-		)
-		motionFrames, motionSpent, motionWindowAt = 0, 0, time.Now()
-	}
-}
-
-// How much larger than the panel each photo is rendered. The surplus is what
-// the pan travels across, so it sets both the crop tightness and the speed.
+// How long one photo takes to dissolve into the next.
 //
-// 0.20 on a 1024px panel gives 205px of travel over a 10s slide, about
-// 20px/second. That matters because Fyne rounds geometry to whole pixels
-// (roundToPixelCoords in internal/painter/gl/draw.go), so there is no sub-pixel
-// interpolation to hide behind: the motion is visible as ~20 one-pixel steps a
-// second, which reads as a drift. The previous 2.5% zoom moved 2.5px/second --
-// about two steps a second -- which read as a twitch no matter the frame rate.
-const kenBurnsOverscan = 0.20
-
-func (l *kenBurnsLayout) updateImage() {
-	if l.size.Width < 1 || l.size.Height < 1 {
-		return
-	}
-
-	extraWidth := l.size.Width * kenBurnsOverscan
-	extraHeight := l.size.Height * kenBurnsOverscan
-
-	// Deliberately a pan, with no zoom. Resize invalidates the texture and makes
-	// Fyne regenerate and re-upload it; Move only calls repaint and leaves the
-	// cached texture alone. Since the size is constant for a given panel, this
-	// call hits Resize's early return after the first frame and costs nothing.
-	l.image.Resize(fyne.NewSize(l.size.Width+extraWidth, l.size.Height+extraHeight))
-
-	// Travel the full surplus, corner to opposite corner, so progress 0 and 1
-	// sit at the two extremes rather than drifting around the centre.
-	x := -extraWidth/2 + l.direction.X*extraWidth*(l.progress-0.5)
-	y := -extraHeight/2 + l.direction.Y*extraHeight*(l.progress-0.5)
-	l.image.Move(fyne.NewPos(x, y))
-}
+// This animates Translucency rather than geometry, which is the whole point:
+// position and size are rounded to whole pixels by the painter
+// (roundToPixelCoords in internal/painter/gl/draw.go), so any slow movement
+// advances in visible one-pixel steps. Alpha reaches the shader as a float
+// uniform with no rounding at all, so a fade this slow is genuinely continuous
+// where a pan of the same duration could never be.
+const crossfadeDuration = 1500 * time.Millisecond
 
 func NewPhotoFrame(server *SetupServer) *PhotoFrame {
 	godotenv.Load()
@@ -199,18 +132,26 @@ func NewPhotoFrame(server *SetupServer) *PhotoFrame {
 }
 
 func (pf *PhotoFrame) setupUI() {
-	pf.imageView = canvas.NewImageFromResource(nil)
-	pf.imageView.FillMode = canvas.ImageFillContain
 	// Fastest, not Smooth. Smooth makes Fyne run draw.CatmullRom.Scale on the
 	// CPU every time the texture is invalidated (internal/painter/image.go),
-	// and the ken burns animation invalidates it on every frame -- which is
-	// what pinned the Pi to 2 fps. Fastest returns the pixels untouched and
-	// lets the GPU scale; it still filters with GL_LINEAR, so it is bilinear
-	// rather than nearest-neighbour. decodeImage does one good CatmullRom pass
-	// per slide so the GPU is only ever scaling up by the zoom fraction.
-	pf.imageView.ScaleMode = canvas.ImageScaleFastest
-	pf.imageLayout = &kenBurnsLayout{image: pf.imageView}
-	imageLayer := container.New(pf.imageLayout, pf.imageView)
+	// which pinned the Pi to 2fps back when the animation invalidated it every
+	// frame. Fastest returns the pixels untouched and lets the GPU scale; it
+	// still filters with GL_LINEAR, so bilinear rather than nearest-neighbour.
+	// decodeImage does one good CatmullRom pass per photo, so the GPU has
+	// almost no scaling left to do.
+	newLayer := func() *canvas.Image {
+		layer := canvas.NewImageFromResource(nil)
+		layer.FillMode = canvas.ImageFillContain
+		layer.ScaleMode = canvas.ImageScaleFastest
+		return layer
+	}
+
+	pf.imageBack = newLayer()
+	pf.imageFront = newLayer()
+	// Fully transparent until a crossfade runs.
+	pf.imageFront.Translucency = 1
+
+	imageLayer := container.NewStack(pf.imageBack, pf.imageFront)
 
 	// Create black background rectangle
 	blackBg := canvas.NewRectangle(color.Black)
@@ -242,20 +183,6 @@ func (pf *PhotoFrame) setupUI() {
 	}
 	pf.window.CenterOnScreen()
 
-	// Temporary, alongside the fps counter. Fyne rounds geometry in scaled units
-	// (roundToPixelCoords), so a canvas scale other than 1.0 makes the smallest
-	// possible movement larger than one device pixel -- which would cap how
-	// smooth the pan can ever be, independently of frame rate or distance.
-	go func() {
-		time.Sleep(2 * time.Second)
-		canvas := pf.window.Canvas()
-		log.Printf(
-			"canvas: scale=%.3f size=%.0fx%.0f (pixel quantum = %.2f device px)",
-			canvas.Scale(), canvas.Size().Width, canvas.Size().Height,
-			1/canvas.Scale(),
-		)
-	}()
-
 	go func() {
 		pf.window.Canvas().SetOnTypedKey(func(event *fyne.KeyEvent) {
 			switch event.Name {
@@ -271,56 +198,71 @@ func (pf *PhotoFrame) setupUI() {
 }
 
 func (pf *PhotoFrame) loadImage(path string) {
-	// pf.imageView = canvas.NewImageFromURI(s3URI)
-
-	// image := canvas.NewImageFromFile(path)
-	// pf.imageView.FillMode = canvas.ImageFillContain
-	// pf.imageView.Image = image
-	// pf.imageView.Refresh()
-	// fmt.Println("loadImage.canvasLoaded")
-	// pf.imageView.File = path
-	// fmt.Println("loadImage.refreshed")
-	// uri, err := storage.ParseURI(path)
-	// if err != nil {
-	// 	panic(fmt.Sprintf("Error parsing %s", c.photoUrl))
-	// }
-	// image := canvas.NewImageFromURI(uri)
-	// image.FillMode = canvas.ImageFillContain
-
-	// Decode once here rather than handing Fyne the path.
-	//
-	// canvas.Image.Resize branches on `isSVG || Image == nil`. With only File
-	// set, Image is nil, so every resize took the "rasterise at the new size"
-	// path -- which calls Refresh, which re-opens the file and decodes the JPEG
-	// again. The ken burns animation resizes on every frame, so the Pi was
-	// decoding a full JPEG off disk twice a second to shift the image ~1.3px.
-	// With Image populated, Resize instead takes the branch Fyne annotates as
-	// "just re-size using GPU scaling".
-	decoded, err := decodeImage(path, pf.imageLayout.size)
+	// Decode here rather than handing Fyne the path. canvas.Image.Refresh calls
+	// updateReader, which does os.Open on File and decodes it again -- so a
+	// File-backed image re-reads from disk on every refresh, and the crossfade
+	// refreshes on every frame.
+	decoded, err := decodeImage(path, pf.window.Canvas().Size())
 	if err != nil {
 		log.Printf("Failed to decode %s: %v", path, err)
 		return
 	}
 
 	fyne.Do(func() {
-		// File must be cleared: updateReader prefers it over Image and would
-		// still hit the disk on every Refresh.
-		pf.imageView.File = ""
-		pf.imageView.Resource = nil
-		pf.imageView.Image = decoded
+		// File must stay empty: updateReader checks it before Image and would
+		// otherwise keep hitting the disk.
+		pf.imageFront.File = ""
+		pf.imageFront.Resource = nil
+		pf.imageFront.Image = decoded
+		pf.imageFront.Translucency = 1
+		pf.imageFront.Refresh()
 
-		pf.imageView.Refresh()
-		pf.startImageMotion()
+		pf.startCrossfade()
 	})
 }
 
-// decodeImage decodes a photo and, if it is larger than the panel needs,
-// downscales it once to just above panel size.
+// startCrossfade dissolves imageFront in over imageBack, then promotes it.
+func (pf *PhotoFrame) startCrossfade() {
+	if pf.imageFade != nil {
+		pf.imageFade.Stop()
+	}
+
+	incoming := pf.imageFront.Image
+
+	pf.imageFade = fyne.NewAnimation(crossfadeDuration, func(progress float32) {
+		pf.imageFront.Translucency = float64(1 - progress)
+		// Translucency alone doesn't mark anything dirty, and the SetDirty that
+		// Move relies on proved unreliable here, so ask for a real refresh.
+		canvas.Refresh(pf.imageFront)
+
+		if progress < 1 {
+			return
+		}
+
+		// Promote the finished photo to the back layer and park the front one
+		// transparent again, ready for the next arrival. The runner guarantees a
+		// final Tick(1.0) (internal/animation/runner.go), so this always runs.
+		pf.imageBack.File = ""
+		pf.imageBack.Resource = nil
+		pf.imageBack.Image = incoming
+		pf.imageBack.Refresh()
+
+		pf.imageFront.Translucency = 1
+		canvas.Refresh(pf.imageFront)
+	})
+	pf.imageFade.Curve = fyne.AnimationEaseInOut
+	pf.imageFade.Start()
+}
+
+// decodeImage decodes a photo and downscales it once to fit the panel.
 //
-// This is the expensive resample, paid once per slide instead of once per frame.
-// Photos arrive up to 1920px wide from the web app's upload resize, and the
-// panel is 1024x600, so without this the GPU holds a texture with ~3x more
-// pixels than it can show.
+// Photos arrive up to 1920px wide from the web app's upload resize against a
+// 1024x600 panel, so without this the GPU holds a texture with roughly three
+// times more pixels than it can show -- and the crossfade blends both layers
+// every frame, so there are two of them.
+//
+// Nothing is cropped: the whole photo stays visible, letterboxed by
+// ImageFillContain where its aspect doesn't match the panel.
 func decodeImage(path string, panel fyne.Size) (image.Image, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -333,63 +275,34 @@ func decodeImage(path string, panel fyne.Size) (image.Image, error) {
 		return nil, err
 	}
 
-	// Before the first Layout the panel size is unknown; keep full resolution
-	// rather than guessing at a target.
+	// Before the window is laid out the panel size is unknown; keep full
+	// resolution rather than guessing at a target.
 	if panel.Width < 1 || panel.Height < 1 {
 		return decoded, nil
 	}
 
-	box := image.Rect(
-		0, 0,
-		int(math.Round(float64(panel.Width)*(1+kenBurnsOverscan))),
-		int(math.Round(float64(panel.Height)*(1+kenBurnsOverscan))),
-	)
-
-	// Crop to the panel's aspect rather than fitting inside it. ImageFillContain
-	// letterboxes anything that doesn't match, and panning a letterboxed image
-	// just slides the black bars around instead of revealing more photo.
 	source := decoded.Bounds()
-	boxAspect := float64(box.Dx()) / float64(box.Dy())
-	sourceAspect := float64(source.Dx()) / float64(source.Dy())
-
-	crop := source
-	switch {
-	case sourceAspect > boxAspect: // too wide, trim the sides
-		width := int(math.Round(float64(source.Dy()) * boxAspect))
-		inset := (source.Dx() - width) / 2
-		crop = image.Rect(source.Min.X+inset, source.Min.Y, source.Min.X+inset+width, source.Max.Y)
-	case sourceAspect < boxAspect: // too tall, trim top and bottom
-		height := int(math.Round(float64(source.Dx()) / boxAspect))
-		inset := (source.Dy() - height) / 2
-		crop = image.Rect(source.Min.X, source.Min.Y+inset, source.Max.X, source.Min.Y+inset+height)
+	ratio := math.Min(
+		float64(panel.Width)/float64(source.Dx()),
+		float64(panel.Height)/float64(source.Dy()),
+	)
+	// Already small enough; upscaling here would only waste memory, since the
+	// GPU can stretch it just as well.
+	if ratio >= 1 {
+		return decoded, nil
 	}
 
+	target := image.Rect(
+		0, 0,
+		int(math.Round(float64(source.Dx())*ratio)),
+		int(math.Round(float64(source.Dy())*ratio)),
+	)
 	// CatmullRom is deliberate: it's the good kernel, and paying for it once per
-	// slide is invisible against a 10s dwell. It is exactly what
+	// photo is invisible against a 10s dwell. It is exactly what
 	// ImageScaleSmooth was otherwise running on every single frame.
-	out := image.NewRGBA(box)
-	xdraw.CatmullRom.Scale(out, box, decoded, crop, xdraw.Src, nil)
+	out := image.NewRGBA(target)
+	xdraw.CatmullRom.Scale(out, target, decoded, source, xdraw.Src, nil)
 	return out, nil
-}
-
-func (pf *PhotoFrame) startImageMotion() {
-	if pf.imageMotion != nil {
-		pf.imageMotion.Stop()
-	}
-
-	directions := []fyne.Position{
-		fyne.NewPos(-1, -1),
-		fyne.NewPos(1, -1),
-		fyne.NewPos(1, 1),
-		fyne.NewPos(-1, 1),
-	}
-	pf.imageLayout.direction = directions[pf.motionSequence%len(directions)]
-	pf.motionSequence++
-	pf.imageLayout.setProgress(0)
-
-	pf.imageMotion = fyne.NewAnimation(10*time.Second, pf.imageLayout.setProgress)
-	pf.imageMotion.Curve = fyne.AnimationLinear
-	pf.imageMotion.Start()
 }
 
 func (pf *PhotoFrame) nextImage() {
