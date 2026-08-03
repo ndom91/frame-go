@@ -76,9 +76,34 @@ func (l *kenBurnsLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(1, 1)
 }
 
+// Temporary instrumentation for diagnosing jerky motion. Fyne invokes
+// setProgress once per animation frame, so counting calls measures the
+// effective frame rate directly, and timing updateImage attributes the cost to
+// the per-frame image rescale. Remove once the motion is tuned.
+var (
+	motionFrames   int
+	motionSpent    time.Duration
+	motionWindowAt = time.Now()
+)
+
 func (l *kenBurnsLayout) setProgress(progress float32) {
 	l.progress = progress
+
+	// Animation callbacks all run on Fyne's main goroutine, so these counters
+	// need no synchronisation.
+	start := time.Now()
 	l.updateImage()
+	motionSpent += time.Since(start)
+	motionFrames++
+
+	if elapsed := time.Since(motionWindowAt); elapsed >= time.Second {
+		log.Printf(
+			"ken burns: %.1f fps, %.2f ms/frame in updateImage",
+			float64(motionFrames)/elapsed.Seconds(),
+			motionSpent.Seconds()*1000/float64(motionFrames),
+		)
+		motionFrames, motionSpent, motionWindowAt = 0, 0, time.Now()
+	}
 }
 
 func (l *kenBurnsLayout) updateImage() {
