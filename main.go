@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -33,20 +34,23 @@ import (
 )
 
 type PhotoFrame struct {
-	app            fyne.App
-	window         fyne.Window
+	app    fyne.App
+	window fyne.Window
 	// Two stacked layers: imageBack holds the photo currently on screen, and
 	// imageFront is the incoming one, faded in over the top.
-	imageBack      *canvas.Image
-	imageFront     *canvas.Image
-	imageFade      *fyne.Animation
-	currentIdx     int
-	images         []string
-	s3Client       *s3.Client
-	bucketName     string
-	imagesDir      string
-	syncMutex      sync.RWMutex
-	frameId        string
+	imageBack  *canvas.Image
+	imageFront *canvas.Image
+	imageFade  *fyne.Animation
+	// Identifies the most recently requested photo, so a decode that finishes
+	// after a newer one was asked for can be discarded.
+	loadSeq    atomic.Uint64
+	currentIdx int
+	images     []string
+	s3Client   *s3.Client
+	bucketName string
+	imagesDir  string
+	syncMutex  sync.RWMutex
+	frameId    string
 }
 
 type tapZone struct {
@@ -198,27 +202,46 @@ func (pf *PhotoFrame) setupUI() {
 }
 
 func (pf *PhotoFrame) loadImage(path string) {
-	// Decode here rather than handing Fyne the path. canvas.Image.Refresh calls
-	// updateReader, which does os.Open on File and decodes it again -- so a
-	// File-backed image re-reads from disk on every refresh, and the crossfade
-	// refreshes on every frame.
-	decoded, err := decodeImage(path, pf.window.Canvas().Size())
-	if err != nil {
-		log.Printf("Failed to decode %s: %v", path, err)
-		return
-	}
+	// Runs on Fyne's main goroutine -- the slideshow ticker wraps nextImage in
+	// fyne.DoAndWait, and taps and key events are already on it -- so the canvas
+	// can be read here, but nothing slow may happen here.
+	panel := pf.window.Canvas().Size()
 
-	fyne.Do(func() {
-		// File must stay empty: updateReader checks it before Image and would
-		// otherwise keep hitting the disk.
-		pf.imageFront.File = ""
-		pf.imageFront.Resource = nil
-		pf.imageFront.Image = decoded
-		pf.imageFront.Translucency = 1
-		pf.imageFront.Refresh()
+	// Decode off the render thread. Doing it inline froze the outgoing photo for
+	// a few hundred milliseconds before every transition, since decode plus the
+	// CatmullRom downscale is the most expensive thing per slide.
+	//
+	// The sequence number discards a decode that finished after a newer one was
+	// requested: tapping through photos quickly starts several, and they do not
+	// necessarily complete in order.
+	seq := pf.loadSeq.Add(1)
 
-		pf.startCrossfade()
-	})
+	go func() {
+		// Decoded rather than handed to Fyne as a path: canvas.Image.Refresh calls
+		// updateReader, which does os.Open on File and decodes again, and the
+		// crossfade refreshes every frame.
+		decoded, err := decodeImage(path, panel)
+		if err != nil {
+			log.Printf("Failed to decode %s: %v", path, err)
+			return
+		}
+
+		fyne.Do(func() {
+			if pf.loadSeq.Load() != seq {
+				return // superseded while decoding
+			}
+
+			// File must stay empty: updateReader checks it before Image and would
+			// otherwise keep hitting the disk.
+			pf.imageFront.File = ""
+			pf.imageFront.Resource = nil
+			pf.imageFront.Image = decoded
+			pf.imageFront.Translucency = 1
+			pf.imageFront.Refresh()
+
+			pf.startCrossfade()
+		})
+	}()
 }
 
 // startCrossfade dissolves imageFront in over imageBack, then promotes it.
@@ -229,32 +252,14 @@ func (pf *PhotoFrame) startCrossfade() {
 
 	incoming := pf.imageFront.Image
 
-	// Temporary. The fade animates a float uniform with no rounding involved, so
-	// it should be continuous -- if it visibly steps, the frames themselves are
-	// not arriving. loop.go ticks animations and draws 1:1, so counting callbacks
-	// counts painted frames. Reports the whole fade at once rather than per
-	// second, since the fade is shorter than a second and a half.
-	fadeFrames := 0
-	fadeStart := time.Now()
-
 	pf.imageFade = fyne.NewAnimation(crossfadeDuration, func(progress float32) {
-		fadeFrames++
-
 		pf.imageFront.Translucency = float64(1 - progress)
-		// Translucency alone doesn't mark anything dirty, and the SetDirty that
-		// Move relies on proved unreliable here, so ask for a real refresh.
+		// Translucency alone marks nothing dirty, so ask for a refresh.
 		canvas.Refresh(pf.imageFront)
 
 		if progress < 1 {
 			return
 		}
-
-		elapsed := time.Since(fadeStart)
-		log.Printf(
-			"crossfade: %d frames in %v (%.1f fps)",
-			fadeFrames, elapsed.Round(time.Millisecond),
-			float64(fadeFrames)/elapsed.Seconds(),
-		)
 
 		// Promote the finished photo to the back layer and park the front one
 		// transparent again, ready for the next arrival. The runner guarantees a
