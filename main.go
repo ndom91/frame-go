@@ -113,21 +113,36 @@ func (l *kenBurnsLayout) setProgress(progress float32) {
 	}
 }
 
-// Fraction the image grows by over one slide. Also determines how much larger
-// than the panel a decoded image is kept, so the GPU only ever scales up.
-const kenBurnsZoom = 0.025
+// How much larger than the panel each photo is rendered. The surplus is what
+// the pan travels across, so it sets both the crop tightness and the speed.
+//
+// 0.20 on a 1024px panel gives 205px of travel over a 10s slide, about
+// 20px/second. That matters because Fyne rounds geometry to whole pixels
+// (roundToPixelCoords in internal/painter/gl/draw.go), so there is no sub-pixel
+// interpolation to hide behind: the motion is visible as ~20 one-pixel steps a
+// second, which reads as a drift. The previous 2.5% zoom moved 2.5px/second --
+// about two steps a second -- which read as a twitch no matter the frame rate.
+const kenBurnsOverscan = 0.20
 
 func (l *kenBurnsLayout) updateImage() {
-	scale := float32(1) + kenBurnsZoom*l.progress
-	imageSize := fyne.NewSize(l.size.Width*scale, l.size.Height*scale)
-	extraWidth := imageSize.Width - l.size.Width
-	extraHeight := imageSize.Height - l.size.Height
+	if l.size.Width < 1 || l.size.Height < 1 {
+		return
+	}
 
-	// Keep the image almost centered while it drifts into a different crop.
-	x := -extraWidth/2 + l.direction.X*extraWidth/4
-	y := -extraHeight/2 + l.direction.Y*extraHeight/4
+	extraWidth := l.size.Width * kenBurnsOverscan
+	extraHeight := l.size.Height * kenBurnsOverscan
+
+	// Deliberately a pan, with no zoom. Resize invalidates the texture and makes
+	// Fyne regenerate and re-upload it; Move only calls repaint and leaves the
+	// cached texture alone. Since the size is constant for a given panel, this
+	// call hits Resize's early return after the first frame and costs nothing.
+	l.image.Resize(fyne.NewSize(l.size.Width+extraWidth, l.size.Height+extraHeight))
+
+	// Travel the full surplus, corner to opposite corner, so progress 0 and 1
+	// sit at the two extremes rather than drifting around the centre.
+	x := -extraWidth/2 + l.direction.X*extraWidth*(l.progress-0.5)
+	y := -extraHeight/2 + l.direction.Y*extraHeight*(l.progress-0.5)
 	l.image.Move(fyne.NewPos(x, y))
-	l.image.Resize(imageSize)
 }
 
 func NewPhotoFrame(server *SetupServer) *PhotoFrame {
@@ -310,28 +325,37 @@ func decodeImage(path string, panel fyne.Size) (image.Image, error) {
 		return decoded, nil
 	}
 
-	// Leave the zoom headroom in place, so the GPU scales up during the pan and
-	// never has to invent detail.
-	maxW := float64(panel.Width) * (1 + kenBurnsZoom)
-	maxH := float64(panel.Height) * (1 + kenBurnsZoom)
+	box := image.Rect(
+		0, 0,
+		int(math.Round(float64(panel.Width)*(1+kenBurnsOverscan))),
+		int(math.Round(float64(panel.Height)*(1+kenBurnsOverscan))),
+	)
 
-	bounds := decoded.Bounds()
-	ratio := math.Min(maxW/float64(bounds.Dx()), maxH/float64(bounds.Dy()))
-	if ratio >= 1 {
-		return decoded, nil
+	// Crop to the panel's aspect rather than fitting inside it. ImageFillContain
+	// letterboxes anything that doesn't match, and panning a letterboxed image
+	// just slides the black bars around instead of revealing more photo.
+	source := decoded.Bounds()
+	boxAspect := float64(box.Dx()) / float64(box.Dy())
+	sourceAspect := float64(source.Dx()) / float64(source.Dy())
+
+	crop := source
+	switch {
+	case sourceAspect > boxAspect: // too wide, trim the sides
+		width := int(math.Round(float64(source.Dy()) * boxAspect))
+		inset := (source.Dx() - width) / 2
+		crop = image.Rect(source.Min.X+inset, source.Min.Y, source.Min.X+inset+width, source.Max.Y)
+	case sourceAspect < boxAspect: // too tall, trim top and bottom
+		height := int(math.Round(float64(source.Dx()) / boxAspect))
+		inset := (source.Dy() - height) / 2
+		crop = image.Rect(source.Min.X, source.Min.Y+inset, source.Max.X, source.Min.Y+inset+height)
 	}
 
-	target := image.Rect(
-		0, 0,
-		int(math.Round(float64(bounds.Dx())*ratio)),
-		int(math.Round(float64(bounds.Dy())*ratio)),
-	)
-	// CatmullRom here is deliberate: it's the good kernel, and paying for it
-	// once per slide is invisible against a 10s dwell. It is precisely what
-	// ImageScaleSmooth was running on every frame.
-	scaled := image.NewRGBA(target)
-	xdraw.CatmullRom.Scale(scaled, target, decoded, bounds, xdraw.Src, nil)
-	return scaled, nil
+	// CatmullRom is deliberate: it's the good kernel, and paying for it once per
+	// slide is invisible against a 10s dwell. It is exactly what
+	// ImageScaleSmooth was otherwise running on every single frame.
+	out := image.NewRGBA(box)
+	xdraw.CatmullRom.Scale(out, box, decoded, crop, xdraw.Src, nil)
+	return out, nil
 }
 
 func (pf *PhotoFrame) startImageMotion() {
