@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"tinygo.org/x/bluetooth"
@@ -37,12 +38,14 @@ type FrameConfig struct {
 	S3Bucket      string `json:"s3_bucket"`
 	CreatedAt     string `json:"created_at"`
 	LastStartedAt string `json:"last_started_at"`
+	APIKey        string `json:"api_key"`
 }
 
 type SetupServer struct {
-	adapter     *bluetooth.Adapter
-	wifiCreds   *WiFiCredentials
-	frameConfig *FrameConfig
+	adapter       *bluetooth.Adapter
+	advertisement *bluetooth.Advertisement
+	wifiCreds     *WiFiCredentials
+	frameConfig   *FrameConfig
 
 	// Characteristics
 	wifiChar   bluetooth.Characteristic
@@ -58,7 +61,9 @@ type SetupServer struct {
 	frameId string
 
 	// Configuration storage
-	configData map[string]any
+	configData           map[string]any
+	configMutex          sync.RWMutex
+	onConfigurationSaved func()
 }
 
 func randomString(length int) string {
@@ -79,7 +84,7 @@ func NewSetupServer() *SetupServer {
 	return server
 }
 
-func (s *SetupServer) Start() error {
+func (s *SetupServer) Initialize() error {
 	// Load existing configuration first
 	if err := s.loadConfigFile(); err != nil {
 		log.Printf("Warning: Could not load existing config: %v", err)
@@ -104,6 +109,10 @@ func (s *SetupServer) Start() error {
 		log.Printf("Generated new Frame ID: %s", s.frameId)
 	}
 
+	return nil
+}
+
+func (s *SetupServer) Start() error {
 	s.adapter = bluetooth.DefaultAdapter
 
 	err := s.adapter.Enable()
@@ -187,6 +196,7 @@ func (s *SetupServer) Start() error {
 
 	// Start advertising
 	adv := s.adapter.DefaultAdvertisement()
+	s.advertisement = adv
 	err = adv.Configure(bluetooth.AdvertisementOptions{
 		LocalName:    "DominoFrame-" + s.frameId,
 		ServiceUUIDs: []bluetooth.UUID{serviceUUID},
@@ -205,6 +215,27 @@ func (s *SetupServer) Start() error {
 	s.updateStatus("Ready for setup")
 
 	return nil
+}
+
+func (s *SetupServer) IsConfigured() bool {
+	endpoint, hasEndpoint := s.getConfigValue("api_endpoint")
+	apiKey, hasAPIKey := s.getConfigValue("api_key")
+	endpointValue, endpointOK := endpoint.(string)
+	keyValue, keyOK := apiKey.(string)
+	metricsActive, active := s.getConfigValue("metrics_active")
+	return hasEndpoint && hasAPIKey && endpointOK && keyOK && endpointValue != "" && keyValue != "" && active && metricsActive == true
+}
+
+func (s *SetupServer) markMetricsActive() {
+	active, exists := s.getConfigValue("metrics_active")
+	if exists && active == true {
+		return
+	}
+	if err := s.saveConfigValue("metrics_active", true); err != nil {
+		log.Printf("Failed to persist active metrics state: %v", err)
+		return
+	}
+	s.Stop()
 }
 
 func (s *SetupServer) handleWiFiCredentials(data []byte) {
@@ -298,6 +329,7 @@ func (s *SetupServer) completeSetup() {
 		s.notifyStatusUpdate()
 		return
 	}
+	s.notifyConfigurationSaved()
 
 	s.setupComplete = true
 	s.updateStatus("Setup complete! Restarting...")
@@ -364,27 +396,35 @@ func (s *SetupServer) connectToWiFi() error {
 
 // saveConfigValue saves a single key-value pair to the configuration
 func (s *SetupServer) saveConfigValue(key string, value any) error {
+	s.configMutex.Lock()
 	s.configData[key] = value
+	s.configMutex.Unlock()
 	return s.writeConfigFile()
 }
 
 // saveConfigValues saves multiple key-value pairs to the configuration
 func (s *SetupServer) saveConfigValues(values map[string]any) error {
+	s.configMutex.Lock()
 	for key, value := range values {
 		s.configData[key] = value
 	}
+	s.configMutex.Unlock()
 	return s.writeConfigFile()
 }
 
 // getConfigValue retrieves a value from the configuration
 func (s *SetupServer) getConfigValue(key string) (any, bool) {
+	s.configMutex.RLock()
+	defer s.configMutex.RUnlock()
 	value, exists := s.configData[key]
 	return value, exists
 }
 
 // writeConfigFile writes the current configuration to disk
 func (s *SetupServer) writeConfigFile() error {
+	s.configMutex.RLock()
 	data, err := json.MarshalIndent(s.configData, "", "  ")
+	s.configMutex.RUnlock()
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
@@ -395,9 +435,12 @@ func (s *SetupServer) writeConfigFile() error {
 	}
 	exPath := filepath.Dir(ex)
 
-	err = os.WriteFile(exPath+"/config.json", data, 0644)
+	err = os.WriteFile(exPath+"/config.json", data, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write config file: %v", err)
+	}
+	if err := os.Chmod(exPath+"/config.json", 0600); err != nil {
+		return fmt.Errorf("failed to secure config file: %v", err)
 	}
 
 	log.Printf("Configuration saved to config.json")
@@ -421,7 +464,9 @@ func (s *SetupServer) loadConfigFile() error {
 		return fmt.Errorf("failed to read config file: %v", err)
 	}
 
+	s.configMutex.Lock()
 	err = json.Unmarshal(data, &s.configData)
+	s.configMutex.Unlock()
 	if err != nil {
 		return fmt.Errorf("failed to parse config file: %v", err)
 	}
@@ -436,7 +481,7 @@ func (s *SetupServer) saveConfiguration() error {
 		return fmt.Errorf("frame configuration is nil")
 	}
 
-	fmt.Printf("Saving configuration for frame: %s\n", s.frameConfig)
+	log.Printf("Saving configuration for frame: %s", s.frameConfig.Name)
 
 	// Build configuration map with frame config + existing data
 	configUpdates := map[string]any{
@@ -445,12 +490,28 @@ func (s *SetupServer) saveConfiguration() error {
 		"s3_bucket":      s.frameConfig.S3Bucket,
 		"setup_complete": true,
 		"setup_time":     time.Now().Format(time.RFC3339),
+		"api_key":        s.frameConfig.APIKey,
 	}
 
 	// Note: We keep the auto-generated frame_id, don't overwrite it
 	// with the one from frameConfig unless it's specifically needed
 
 	return s.saveConfigValues(configUpdates)
+}
+
+func (s *SetupServer) setConfigurationSavedCallback(callback func()) {
+	s.configMutex.Lock()
+	defer s.configMutex.Unlock()
+	s.onConfigurationSaved = callback
+}
+
+func (s *SetupServer) notifyConfigurationSaved() {
+	s.configMutex.RLock()
+	callback := s.onConfigurationSaved
+	s.configMutex.RUnlock()
+	if callback != nil {
+		callback()
+	}
 }
 
 func (s *SetupServer) testWiFiConnection() {
@@ -522,7 +583,9 @@ func (s *SetupServer) getCurrentStatus() string {
 }
 
 func (s *SetupServer) Stop() {
-	if s.adapter != nil {
-		log.Println("Stopping BLE server...")
+	if s.advertisement != nil {
+		if err := s.advertisement.Stop(); err != nil {
+			log.Printf("Failed to stop BLE advertising: %v", err)
+		}
 	}
 }

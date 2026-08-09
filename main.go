@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -11,11 +13,14 @@ import (
 	"io"
 	"log"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -43,14 +48,17 @@ type PhotoFrame struct {
 	imageFade  *fyne.Animation
 	// Identifies the most recently requested photo, so a decode that finishes
 	// after a newer one was asked for can be discarded.
-	loadSeq    atomic.Uint64
-	currentIdx int
-	images     []string
-	s3Client   *s3.Client
-	bucketName string
-	imagesDir  string
-	syncMutex  sync.RWMutex
-	frameId    string
+	loadSeq         atomic.Uint64
+	currentIdx      int
+	images          []string
+	s3Client        *s3.Client
+	bucketName      string
+	imagesDir       string
+	syncMutex       sync.RWMutex
+	frameId         string
+	startedAt       time.Time
+	reportHeartbeat func(string)
+	activeImage     atomic.Value
 }
 
 type tapZone struct {
@@ -132,7 +140,105 @@ func NewPhotoFrame(server *SetupServer) *PhotoFrame {
 		bucketName: os.Getenv("R2_BUCKET_NAME"),
 		imagesDir:  imagesDir,
 		frameId:    server.frameId,
+		startedAt:  time.Now(),
 	}
+}
+
+func (pf *PhotoFrame) startHeartbeat(server *SetupServer) {
+	report := func(activeImage string) {
+		if activeImage == "" {
+			if current, ok := pf.activeImage.Load().(string); ok {
+				activeImage = current
+			}
+		}
+		endpoint, hasEndpoint := server.getConfigValue("api_endpoint")
+		apiKey, hasAPIKey := server.getConfigValue("api_key")
+		apiEndpoint, endpointOK := endpoint.(string)
+		key, keyOK := apiKey.(string)
+		if !hasEndpoint || !hasAPIKey || !endpointOK || !keyOK || apiEndpoint == "" || key == "" {
+			return
+		}
+		if !strings.HasPrefix(apiEndpoint, "https://") {
+			log.Println("Metrics API endpoint must use HTTPS, skipping heartbeat")
+			return
+		}
+
+		body, err := json.Marshal(map[string]any{
+			"uptimeSeconds":         hostUptimeSeconds(),
+			"storageTotalBytes":     storageTotalBytes(pf.imagesDir),
+			"storageAvailableBytes": storageAvailableBytes(pf.imagesDir),
+			"activeImage":           activeImage,
+		})
+		if err != nil {
+			log.Printf("Failed to encode heartbeat: %v", err)
+			return
+		}
+		request, err := http.NewRequest(
+			http.MethodPost,
+			strings.TrimRight(apiEndpoint, "/")+"/api/frames/heartbeat",
+			bytes.NewReader(body),
+		)
+		if err != nil {
+			log.Printf("Failed to create heartbeat request: %v", err)
+			return
+		}
+		request.Header.Set("Authorization", "Bearer "+key)
+		request.Header.Set("Content-Type", "application/json")
+
+		response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+		if err != nil {
+			log.Printf("Failed to report heartbeat: %v", err)
+			return
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusNoContent {
+			log.Printf("Heartbeat failed with status: %s", response.Status)
+			return
+		}
+		server.markMetricsActive()
+	}
+
+	pf.reportHeartbeat = report
+	server.setConfigurationSavedCallback(func() { report("") })
+	go report("")
+	ticker := time.NewTicker(10 * time.Minute)
+	go func() {
+		for range ticker.C {
+			report("")
+		}
+	}()
+}
+
+func hostUptimeSeconds() uint64 {
+	contents, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(contents))
+	if len(fields) == 0 {
+		return 0
+	}
+	seconds, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	return uint64(seconds)
+}
+
+func storageTotalBytes(path string) uint64 {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0
+	}
+	return stat.Blocks * uint64(stat.Bsize)
+}
+
+func storageAvailableBytes(path string) uint64 {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return 0
+	}
+	return stat.Bavail * uint64(stat.Bsize)
 }
 
 func (pf *PhotoFrame) setupUI() {
@@ -239,13 +345,13 @@ func (pf *PhotoFrame) loadImage(path string) {
 			pf.imageFront.Translucency = 1
 			pf.imageFront.Refresh()
 
-			pf.startCrossfade()
+			pf.startCrossfade(filepath.Base(path))
 		})
 	}()
 }
 
 // startCrossfade dissolves imageFront in over imageBack, then promotes it.
-func (pf *PhotoFrame) startCrossfade() {
+func (pf *PhotoFrame) startCrossfade(activeImage string) {
 	if pf.imageFade != nil {
 		pf.imageFade.Stop()
 	}
@@ -271,6 +377,10 @@ func (pf *PhotoFrame) startCrossfade() {
 
 		pf.imageFront.Translucency = 1
 		canvas.Refresh(pf.imageFront)
+		pf.activeImage.Store(activeImage)
+		if pf.reportHeartbeat != nil {
+			go pf.reportHeartbeat(activeImage)
+		}
 	})
 	pf.imageFade.Curve = fyne.AnimationEaseInOut
 	pf.imageFade.Start()
@@ -506,9 +616,10 @@ func (pf *PhotoFrame) startS3Sync() {
 	}()
 }
 
-func (pf *PhotoFrame) run() {
+func (pf *PhotoFrame) run(server *SetupServer) {
 	pf.setupUI()
 	pf.startS3Sync()
+	pf.startHeartbeat(server)
 	pf.startSlideshow(10 * time.Second)
 	pf.window.ShowAndRun()
 }
@@ -516,11 +627,16 @@ func (pf *PhotoFrame) run() {
 func main() {
 	server := NewSetupServer()
 
-	if err := server.Start(); err != nil {
-		log.Fatalf("Failed to start BLE server: %v", err)
+	if err := server.Initialize(); err != nil {
+		log.Fatalf("Failed to initialize frame configuration: %v", err)
 	}
-	log.Println("BLE server running. Press Ctrl+C to exit.")
+	if !server.IsConfigured() {
+		if err := server.Start(); err != nil {
+			log.Fatalf("Failed to start BLE server: %v", err)
+		}
+		log.Println("BLE server running. Press Ctrl+C to exit.")
+	}
 
 	frame := NewPhotoFrame(server)
-	frame.run()
+	frame.run(server)
 }
