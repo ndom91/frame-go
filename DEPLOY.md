@@ -43,6 +43,27 @@ Environment=R2_SECRET_KEY=secret-key
 Environment=CF_ACCOUNT_ID=cloudflare-account-id
 ```
 
+## Frame configuration
+
+Frames provisioned through the web app receive their HTTPS telemetry endpoint and API key over BLE, then save them beside the executable in `config.json`. Existing frames can be configured manually with:
+
+```json
+{
+  "api_endpoint": "https://domino.photos",
+  "api_key": "frame-api-key"
+}
+```
+
+New or replacement keys must send their first successful heartbeat within one hour. The frame marks `metrics_active` after that heartbeat. On later boots it skips BLE setup; a frame without that marker continues to advertise so it can be provisioned or recovered.
+
+Keep `config.json` readable only by the service account:
+
+```bash
+chmod 600 /path/to/domino-frame/config.json
+```
+
+`config.json` is stored beside the executable. For the documented `/home/pi/domino-frame` installation, its path is `/home/pi/config.json`.
+
 Install the application service and the cursor-hiding service:
 
 ```bash
