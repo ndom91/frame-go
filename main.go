@@ -634,7 +634,9 @@ func main() {
 		if err := server.Start(); err != nil {
 			log.Fatalf("Failed to start BLE server: %v", err)
 		}
-		log.Println("BLE server running. Press Ctrl+C to exit.")
+		log.Println("BLE setup server is running until metrics activation")
+	} else {
+		log.Println("Skipping BLE setup; metrics are already active")
 	}
 
 	frame := NewPhotoFrame(server)

@@ -586,6 +586,8 @@ func (s *SetupServer) Stop() {
 	if s.advertisement != nil {
 		if err := s.advertisement.Stop(); err != nil {
 			log.Printf("Failed to stop BLE advertising: %v", err)
+			return
 		}
+		log.Println("BLE GATT server stopped after metrics activation")
 	}
 }
